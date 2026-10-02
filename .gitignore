@@ -1,0 +1,11 @@
+node_modules/
+__pycache__/
+*.pyc
+*.log
+.DS_Store
+Thumbs.db
+*.zip
+*.xpi
+.twitter-update*.json
+_tmp_*.py
+_fix_*.py

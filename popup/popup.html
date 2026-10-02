@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="popup.css">
+  <link rel="stylesheet" href="../shared/design-system.css">
+</head>
+<body data-theme="facebook" data-kit="facebook">
+  <div class="popup">
+    <header class="popup-header">
+      <img src="../icons/icon48.png" width="30" height="30" alt="" class="popup-icon">
+      <div class="popup-header-text">
+        <h1 id="app-title">Facebook Downloader</h1>
+        <span id="app-version" class="popup-version"></span>
+      </div>
+    </header>
+    <main class="popup-body">
+      <section class="popup-intro" aria-labelledby="guide-title">
+        <span id="page-status" class="popup-status">X download guide</span>
+        <h2 id="guide-title">Download from Facebook</h2>
+        <p id="guide-lead">Download from the home timeline, post pages, or creator profiles.</p>
+      </section>
+      <ol class="popup-steps" aria-label="Download steps">
+        <li class="popup-step"><span class="popup-step-num">1</span><span id="step-open" class="popup-step-text">Browse the home timeline, or open a post, GIF, video, or profile</span></li>
+        <li class="popup-step"><span class="popup-step-num">2</span><span id="step-entry" class="popup-step-text">Click Download beside a feed post, or the floating entry on a detail page</span></li>
+        <li class="popup-step"><span class="popup-step-num">3</span><span id="step-download" class="popup-step-text">Choose items in Current content or Creator, then download</span></li>
+      </ol>
+      <div class="popup-note" role="note">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5M12 8h.01"></path></svg>
+        <p id="detail-note">Home feed posts support individual downloads. Feed ads are hidden by default; turn this off in Settings. Detail pages and profiles have a persistent entry.</p>
+      </div>
+      <a id="btn-go-site" class="popup-btn" href="https://www.facebook.com/" target="_blank" rel="noopener">Open Facebook</a>
+    </main>
+    <footer class="popup-footer">
+      <nav class="popup-footer-links" aria-label="Help links">
+        <a class="popup-footer-link" href="https://snowflake-hangdudu.github.io/Facebook-Downloader/faq.html" target="_blank" rel="noopener">FAQ</a><span class="popup-footer-sep" aria-hidden="true">·</span><a class="popup-footer-link" href="https://snowflake-hangdudu.github.io/Facebook-Downloader/" target="_blank" rel="noopener">Privacy</a>
+      </nav>
+      <div class="popup-footer-line"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg><span id="disclaimer">For personal learning only. Follow Facebook’s terms.</span></div>
+    </footer>
+  </div>
+  <script src="popup-config.js"></script>
+  <script src="../shared/runtime.js"></script>
+  <script src="../shared/theme.js"></script>
+  <script src="../shared/i18n.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

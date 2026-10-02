@@ -1,0 +1,86 @@
+{
+  "themes": [
+    {
+      "id": "tokyo-love",
+      "name": "东爱主题",
+      "colors": {
+        "background": "#FFFBF7",
+        "surface": "#F6F3EE",
+        "surfaceHover": "#EFEAE3",
+        "surfaceStrong": "#E9E3DA",
+        "border": "#E2DDD6",
+        "borderSoft": "#EBE6DF",
+        "textPrimary": "#1C1C1E",
+        "textSecondary": "#4F5360",
+        "textMuted": "#676C76",
+        "primary": "#1E2A44",
+        "primaryStrong": "#1E2A44",
+        "primaryHover": "#34435F",
+        "primarySoft": "#EDF0F5",
+        "primaryBorder": "#AAB4C5",
+        "accent": "#E43D30",
+        "accentSecondary": "#C8B9A6"
+      },
+      "gradients": {
+        "primaryButton": "linear-gradient(135deg, #34435F, #1E2A44)",
+        "preview": "linear-gradient(135deg, #1E2A44 5%, #34435F 60%, #E43D30 100%)",
+        "header": "linear-gradient(90deg, #1E2A44 0%, #E43D30 65%, transparent 100%)"
+      }
+    },
+    {
+      "id": "manchester-sea",
+      "name": "海边的曼彻斯特",
+      "colors": {
+        "background": "#F1F2ED",
+        "surface": "#F8F9F7",
+        "surfaceHover": "#E9EEF0",
+        "surfaceStrong": "#DCE5E8",
+        "border": "#C7D0D1",
+        "borderSoft": "#DEE4E3",
+        "textPrimary": "#2C3440",
+        "textSecondary": "#48545C",
+        "textMuted": "#58656C",
+        "primary": "#2F5F73",
+        "primaryStrong": "#2C3440",
+        "primaryHover": "#476E7F",
+        "primarySoft": "#E5EEF0",
+        "primaryBorder": "#91ACB7",
+        "accent": "#8A3B3A",
+        "accentSecondary": "#A79885"
+      },
+      "gradients": {
+        "primaryButton": "linear-gradient(135deg, #6F8C97, #2F5F73 62%, #2C3440)",
+        "preview": "linear-gradient(135deg, #6F8C97, #2F5F73 65%, #8A3B3A)",
+        "header": "linear-gradient(90deg, #6F8C97 0%, #2F5F73 58%, #8A3B3A 85%, transparent 100%)"
+      }
+    },
+    {
+      "id": "chinese-odyssey",
+      "name": "大话西游",
+      "colors": {
+        "background": "#F7F1E6",
+        "surface": "#FCF8F0",
+        "surfaceHover": "#F1E5D5",
+        "surfaceStrong": "#EAD8C3",
+        "border": "#D8C3A6",
+        "borderSoft": "#E9DBCA",
+        "textPrimary": "#292724",
+        "textSecondary": "#5C4A3F",
+        "textMuted": "#685A50",
+        "primary": "#6B4E3A",
+        "primaryStrong": "#513A2D",
+        "primaryHover": "#87583A",
+        "primarySoft": "#F3E4D3",
+        "primaryBorder": "#C69A77",
+        "accent": "#C97A3E",
+        "accentSecondary": "#A6456B",
+        "deepBlue": "#1E2A44"
+      },
+      "gradients": {
+        "primaryButton": "linear-gradient(135deg, #C97A3E, #91563A 56%, #6B4E3A)",
+        "preview": "linear-gradient(135deg, #D8C3A6, #C97A3E 50%, #A6456B)",
+        "header": "linear-gradient(90deg, #D8C3A6 0%, #C97A3E 48%, #A6456B 82%, transparent 100%)"
+      }
+    }
+  ]
+}

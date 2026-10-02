@@ -1,0 +1,12 @@
+{
+  "name": "facebook-downloader",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Facebook Downloader - Videos, Reels & Photos",
+  "scripts": {
+    "test": "node test/current-selection.mjs && node test/ad-visibility.mjs && node test/page-agent.mjs && node test/filename.mjs && node test/batch.mjs && node test/download-state.mjs && node test/queue-manager.mjs",
+    "pack": "python scripts/pack.py && python scripts/pack_firefox.py",
+    "pack:chromium": "python scripts/pack.py",
+    "pack:firefox": "python scripts/pack_firefox.py"
+  }
+}
