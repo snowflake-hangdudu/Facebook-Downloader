@@ -270,7 +270,7 @@ await waitFor(()=>stored['facebook-dl-tasks-v1'].find(item=>item.id==='no-histor
 const noHistoryTask=stored['facebook-dl-tasks-v1'].find(item=>item.id==='no-history');
 Object.assign(nativeItems.get(noHistoryTask.downloadId),{state:'complete',bytesReceived:5000,totalBytes:5000});
 listeners.downloadsChanged.forEach(listener=>listener({id:noHistoryTask.downloadId,state:{current:'complete'}}));
-await waitFor(()=>stored['facebook-dl-completed-keys-v1']?.includes('NOHISTORY:NOHISTORY-1:video'),'independent completion index');
+await waitFor(()=>stored['facebook-dl-completed-keys-v1']?.includes('NOHISTORY:NOHISTORY-1:1:video'),'independent completion index');
 assert.equal(stored['facebook-dl-history-v1'].some(item=>item.postId==='NOHISTORY'),false);
 const noHistoryDuplicate=await send({type:'FACEBOOK_DL_QUEUE_ADD',tasks:[task('NOHISTORY','no-history-again',{recordHistory:false})]});
 assert.equal(noHistoryDuplicate.added,0,'completed media is skipped even with history disabled');

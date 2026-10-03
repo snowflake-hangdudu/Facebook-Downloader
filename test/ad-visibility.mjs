@@ -9,9 +9,10 @@ const filter = context.FacebookDownloaderModel.filterTimelineAds;
 const normal = { node: { __typename: 'Story', post_id: '111_222', message: { text: 'ordinary post' } } };
 const sponsored = { node: { __typename: 'Story', post_id: '333_444', sponsored_data: { ad_id: 'ad-1' } } };
 const labeled = { category: 'SPONSORED', node: { __typename: 'Story', post_id: '555_666' } };
-const payload = { data: { viewer: { news_feed: { edges: [normal, sponsored, labeled] } } } };
+const adIdOnly = { node: { __typename: 'Story', post_id: '777_888', ad_id: 'ad-2' } };
+const payload = { data: { viewer: { news_feed: { edges: [normal, sponsored, labeled, adIdOnly] } } } };
 
-assert.equal(filter(payload), 2);
+assert.equal(filter(payload), 3);
 assert.equal(payload.data.viewer.news_feed.edges.length, 1);
 assert.equal(payload.data.viewer.news_feed.edges[0], normal);
 assert.equal(filter(payload), 0);

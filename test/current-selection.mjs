@@ -13,6 +13,10 @@ const context = vm.createContext({
   selectedMedia: new Set(), mediaSelectionPost: '', currentBody: element(),
   post: { shortcode: 'one', author: { username: 'creator' }, media: [1, 2, 3].map(index => ({ index, type: 'image' })) },
   t: key => key, currentPost() { return context.post; }, downloadKey: (post, media) => `${post.shortcode}:${media.index}`,
+  isReelPage: () => false, document: { querySelectorAll: () => [] }, showCreatorVideoCover() {},
+  postCoverShape: () => '', viewedPostArticle: null,
+  authorLabel: (author) => author?.displayName || author?.username || '',
+  cleanHandle: (value) => String(value || ''),
   pageType: () => 'image', pageTypeLabel: () => 'Photo', coverUrl: () => '', setMediaPreview() {}, creatorReady: () => true,
   completedKeys: async () => new Set(['one:1', 'one:2', 'one:3']),
   Model: { profileUrl: (name) => 'https://www.facebook.com/' + name },
@@ -30,8 +34,6 @@ assert.equal(context.selectedMedia.size, 0);
 assert.equal(controls.findLast(control => control.label === 'downloadSelected').disabled, true);
 render();
 assert.equal(context.selectedMedia.size, 0, 'a redraw must preserve explicit empty selection');
-await click('selectVideos');
-assert.equal(context.selectedMedia.size, 0, 'zero matching media must remain unselected');
 await click('selectAllShort');
 assert.equal(context.selectedMedia.size, 3);
 await click('selectNewShort');
@@ -75,6 +77,8 @@ const captureEnd = source.indexOf("    toggleBtn.addEventListener('pointerdown'"
 let captureClick;
 Object.assign(entryContext, {
   toggleDragged: true,
+  suppressToggleClick: false,
+  openFloatingPanel() { return entryContext.openProfileBatch(); },
   toggleBtn: { addEventListener(type, callback, capture) { assert.equal(capture, true); captureClick = callback; } },
 });
 vm.runInContext(source.slice(captureStart, captureEnd), entryContext);

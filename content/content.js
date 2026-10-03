@@ -106,7 +106,12 @@
     const key = creatorKey;
     return visibleCreatorPosts()
       .map((post) => creatorPosts.get(post.shortcode || post.id) || post)
-      .filter((post) => post?.shortcode && !creatorReady(post) && !creatorAutoAttempts.has(key + ':' + post.shortcode));
+      .filter((post) => {
+        if (!post?.shortcode || creatorReady(post) || creatorAutoAttempts.has(key + ':' + post.shortcode)) return false;
+        // A reel tile already has its cover. Fetching every video here fights the page preview and flickers the list.
+        if (profileTab() === 'reels' && post.media?.some((item) => item.imageCandidates?.length || Model.allowedMediaUrl(item.posterUrl || '')) && !post.media?.some((item) => item.videoCandidates?.length)) return false;
+        return true;
+      });
   }
   function scheduleCreatorResolve() {
     clearTimeout(creatorAutoTimer);
@@ -117,12 +122,35 @@
     }, 700);
   }
   const creatorCategories = new Map();
-  const creatorCategory = () => {
-    if (/\/media\/?$/i.test(location.pathname)) return creatorKey + ':media';
-    if (/\/videos\/?$/i.test(location.pathname)) return creatorKey + ':videos';
-    if (/\/likes\/?$/i.test(location.pathname)) return creatorKey + ':likes';
-    return creatorKey + ':posts';
-  };
+  function profileTab() {
+    let sk = '';
+    try { sk = new URL(location.href).searchParams.get('sk') || ''; } catch (_) {}
+    const path = location.pathname.replace(/\/+$/, '');
+    if (/\/reels?$/i.test(path) || /^reels/i.test(sk)) return 'reels';
+    if (/\/photos(?:_by|_albums)?$/i.test(path) || /^photos/i.test(sk)) return 'photos';
+    if (/\/videos\/?$/i.test(path) || /^videos/i.test(sk)) return 'videos';
+    if (/\/media\/?$/i.test(path)) return 'media';
+    if (/\/likes\/?$/i.test(path)) return 'likes';
+    return 'posts';
+  }
+  const creatorCategory = () => creatorKey + ':' + profileTab();
+  function postMatchesProfileTab(post) {
+    const tab = profileTab();
+    const url = String(post?.pageUrl || '');
+    if (tab === 'reels') return /\/reels?\//i.test(url);
+    if (tab === 'photos') return /(?:\/photo(?:\.php)?|[?&]fbid=|\/photos\/)/i.test(url) && !/\/reels?\//i.test(url);
+    if (tab === 'videos') return /\/videos\/|\/watch|fb\.watch/i.test(url);
+    return true;
+  }
+  function creatorCoverClass(post) {
+    const tab = profileTab();
+    if (tab === 'photos') return ' is-photo';
+    if (tab === 'reels') return ' is-reel';
+    const type = pageType(post);
+    if (type === 'video' || type === 'gif' || /\/reels?\//i.test(String(post.pageUrl || ''))) return ' is-reel';
+    if (type === 'image' || type === 'carousel') return ' is-photo';
+    return '';
+  }
   function postHasMedia(post) {
     // Keep only posts that either already have media URLs, or are videos awaiting resolve.
     return Boolean(post?.media?.some((media) =>
@@ -194,7 +222,7 @@
   function refreshProfileCreatorData(payload = snapshot) {
     if (snapshot.kind !== 'profile') return;
     scanDomCreatorPosts();
-    const incoming = profilePostsFromSnapshot(payload);
+    const incoming = profilePostsFromSnapshot(payload).filter(postMatchesProfileTab);
     registerCreatorCategoryIds(incoming);
     mergeCreatorPosts(incoming);
     pruneTextOnlyCreatorPosts();
@@ -285,16 +313,17 @@
   function mergeFeedAuthors(post, article) {
     const media = feedMediaBox(article);
     if (!media) return post;
-    const authors = [...(post.authors || []), ...(post.author?.username ? [post.author] : [])];
+    const authors = [];
+    for (const author of [...(post.authors || []), ...(post.author?.username ? [post.author] : [])]) rememberAuthor(authors, author);
     for (const link of article.querySelectorAll('a[href]')) {
       const name = Model.usernameFromUrl(link.href);
       const rect = link.getBoundingClientRect();
-      if (!name || !link.textContent.trim() || rect.top >= media.top) continue;
-      authors.push({ username: name, displayName: link.textContent.trim() });
+      if (!name || rect.top >= media.top) continue;
+      const displayName = linkVisibleName(link);
+      if (!displayName) continue;
+      rememberAuthor(authors, { username: name, displayName, profileUrl: link.href });
     }
-    const unique = authors.filter((author, index) => author?.username &&
-      authors.findIndex((other) => other?.username?.toLowerCase() === author.username.toLowerCase()) === index);
-    return { ...post, authors: unique };
+    return { ...post, authors };
   }
   async function openFeedPost(article, url) {
     const token = ++viewedPostToken;
@@ -304,7 +333,7 @@
     if (token !== viewedPostToken) return;
     const video = article.querySelector('video');
     const image = [...article.querySelectorAll('img')].sort((a, b) => b.clientHeight - a.clientHeight)[0];
-    const authorAnchor = [...article.querySelectorAll('a[href]')].find((link) => Model.usernameFromUrl(link.href) && link.textContent.trim());
+    const authorAnchor = [...article.querySelectorAll('a[href]')].find((link) => Model.usernameFromUrl(link.href) && linkVisibleName(link));
     const username = authorAnchor ? Model.usernameFromUrl(authorAnchor.href) : '';
     const caption = image?.alt || article.querySelector('h1')?.textContent || [...article.querySelectorAll('span')].map((item) => item.textContent.trim()).find((value) => value.length > 35 && value.length < 1000) || '';
     const videoUrl = Model.allowedMediaUrl(video?.currentSrc || video?.src || '');
@@ -324,6 +353,7 @@
     mediaSelectionPost = '';
     shell.open?.();
     renderView();
+    scheduleFeedPosition();
     if (viewedPostLoading) {
       try {
         const post = viewedPost;
@@ -411,75 +441,157 @@
     }
     return '';
   }
-  function feedHeaderMore(article) {
-    const labeled = [...article.querySelectorAll('[aria-label]')].find((el) => /actions for this post|此帖的操作|此貼文的操作|此贴的操作|更多选项|more options/i.test(el.getAttribute('aria-label') || ''));
-    if (labeled) return labeled;
-    return [...article.querySelectorAll('[aria-haspopup="menu"]')].find((btn) => (btn.getBoundingClientRect().width || 0) < 56);
-  }
-  function mountFeedEntry(article, entry) {
-    const more = feedHeaderMore(article);
-    const host = more?.parentElement;
-    if (!more || !host || host === article || host.closest('#facebook-dl-root')) return false;
-    entry.classList.add('is-inline', 'is-header');
-    const afterMore = more.nextSibling;
-    if (entry.parentElement !== host || entry.previousElementSibling !== more) {
-      if (afterMore) host.insertBefore(entry, afterMore);
-      else host.appendChild(entry);
+  function isReelsShelf(article) {
+    if (/^reels\b/i.test((article.innerText || '').trim().slice(0, 40))) return true;
+    const heading = [...article.querySelectorAll('h1, h2, h3, h4, [role="heading"]')].find((el) => el.closest('[role="article"]') === article && /^reels$/i.test((el.textContent || '').replace(/\s+/g, ' ').trim()));
+    if (heading) return true;
+    const codes = new Set();
+    for (const link of article.querySelectorAll('a[href*="/reel"]')) {
+      const code = Model.shortcodeOf(link.href || '');
+      if (!code) continue;
+      codes.add(code);
+      if (codes.size > 1) return true;
     }
-    ['position', 'top', 'left', 'right', 'bottom', 'z-index'].forEach((prop) => entry.style.removeProperty(prop));
-    entry.style.visibility = 'visible';
-    return true;
+    return false;
+  }
+  function headerActionAnchor(article) {
+    const host = article.getBoundingClientRect();
+    if (!host.width) return null;
+    const buttons = [...article.querySelectorAll('[aria-label], [aria-haspopup="menu"], [role="button"]')].filter((el) => {
+      if (el.closest('.x-dl-post-entry, #facebook-dl-root')) return false;
+      const box = el.getBoundingClientRect();
+      if (box.width < 20 || box.width > 44 || box.height < 20 || box.height > 44) return false;
+      if (box.top - host.top > 78 || box.bottom < host.top) return false;
+      if (host.right - box.right > 180) return false;
+      return true;
+    });
+    if (!buttons.length) return null;
+    buttons.sort((a, b) => b.getBoundingClientRect().right - a.getBoundingClientRect().right);
+    const anchor = buttons[0];
+    let row = anchor.parentElement;
+    const neighbor = buttons[1];
+    if (neighbor) {
+      const seen = new Set();
+      let node = anchor;
+      while (node && node !== article) {
+        seen.add(node);
+        node = node.parentElement;
+      }
+      node = neighbor;
+      while (node && node !== article && !seen.has(node)) node = node.parentElement;
+      if (node && node !== article) row = node;
+    }
+    if (!row || row === article || row.closest('#facebook-dl-root')) return null;
+    let slot = anchor;
+    while (slot.parentElement && slot.parentElement !== row) slot = slot.parentElement;
+    return { slot };
   }
   function positionFeedEntry(article, entry) {
-    if (mountFeedEntry(article, entry)) return;
-    entry.classList.remove('is-inline', 'is-header');
-    if (!article.getBoundingClientRect().width) { entry.style.visibility = 'hidden'; return; }
+    const placed = headerActionAnchor(article);
+    ['position', 'top', 'left', 'right', 'bottom', 'z-index', 'height'].forEach((prop) => entry.style.removeProperty(prop));
+    if (Model.routeFromUrl(location.href).kind === 'feed') {
+      entry.classList.remove('is-inline', 'is-header');
+      entry.classList.add('is-anchored', 'is-gutter');
+      if (entry.parentElement !== article) article.appendChild(entry);
+      if (!article.getBoundingClientRect().width) {
+        entry.style.visibility = 'hidden';
+        return;
+      }
+      entry.style.visibility = 'visible';
+      entry.style.position = 'absolute';
+      entry.style.zIndex = '4';
+      entry.style.top = '12px';
+      entry.style.bottom = 'auto';
+      entry.style.right = 'auto';
+      entry.style.left = 'calc(100% + 10px)';
+      return;
+    }
+    if (!placed?.slot || !article.getBoundingClientRect().width) {
+      entry.classList.remove('is-inline', 'is-header');
+      entry.classList.add('is-anchored');
+      if (!article.getBoundingClientRect().width) { entry.style.visibility = 'hidden'; return; }
+      entry.style.visibility = 'visible';
+      entry.style.position = 'absolute';
+      entry.style.zIndex = '3';
+      entry.style.top = '8px';
+      entry.style.right = '12px';
+      entry.style.left = 'auto';
+      if (entry.parentElement !== article) article.appendChild(entry);
+      return;
+    }
+    entry.classList.add('is-inline', 'is-header');
+    entry.classList.remove('is-anchored');
     entry.style.visibility = 'visible';
-    entry.style.position = 'absolute';
-    entry.style.zIndex = '2';
-    // Fallback: top-right of the tweet card, clear of action bar.
-    entry.style.top = Math.max(4, 8 - article.clientTop) + 'px';
-    entry.style.right = Math.max(8, 12 + article.clientLeft) + 'px';
-    entry.style.left = 'auto';
-    entry.style.bottom = 'auto';
-    if (entry.parentElement !== article) article.appendChild(entry);
+    if (entry.previousElementSibling !== placed.slot || entry.parentElement !== placed.slot.parentElement) {
+      placed.slot.insertAdjacentElement('afterend', entry);
+    }
   }
   function positionFeedPanel() {
     const panel = document.getElementById('facebook-dl-menu');
     if (!panel) return;
     const entry = viewedPostArticle?.querySelector('.x-dl-post-entry');
     if (!viewedPost || !entry?.isConnected) {
-      panel.style.removeProperty('left');
-      panel.style.removeProperty('top');
-      panel.style.removeProperty('right');
-      panel.style.removeProperty('bottom');
-      panel.style.removeProperty('max-height');
-      panel.style.removeProperty('position');
+      panel.classList.remove('is-following');
+      ['left', 'top', 'right', 'bottom', 'max-height', 'height', 'min-height', 'position'].forEach((prop) => panel.style.removeProperty(prop));
       return;
     }
     const box = entry.getBoundingClientRect();
+    if (box.width < 8) return;
+    if (box.bottom < 8 || box.top > innerHeight - 8) {
+      shell.panel?.hide?.();
+      return;
+    }
     const width = panel.getBoundingClientRect().width || 408;
     const gap = 10;
-    // Always open to the right of the download button so the tweet stays visible.
     let left = box.right + gap;
-    if (left + width > innerWidth - 12) left = Math.max(12, innerWidth - width - 12);
-    let top = Math.max(12, Math.min(box.top, innerHeight - 180));
+    if (left + width > innerWidth - 12) left = Math.max(8, box.left - width - gap);
+    if (left < 8) left = 8;
+    const top = box.top;
+    panel.classList.add('is-following');
     panel.style.position = 'fixed';
     panel.style.left = left + 'px';
     panel.style.right = 'auto';
     panel.style.top = top + 'px';
     panel.style.bottom = 'auto';
-    panel.style.maxHeight = Math.max(160, innerHeight - top - 12) + 'px';
   }
   let feedPositionFrame = 0;
+  let feedFollowWatch = 0;
+  function syncAnchoredPanel() {
+    document.querySelectorAll('[role="article"].x-dl-feed-host > .x-dl-post-entry').forEach((entry) => {
+      const article = entry.parentElement;
+      if (article) positionFeedEntry(article, entry);
+    });
+    if (shell.panel?.isOpen?.()) positionFeedPanel();
+  }
+  function watchFeedFollow() {
+    if (feedFollowWatch || !shell.panel?.isOpen?.() || !viewedPostArticle) return;
+    const tick = () => {
+      if (!shell.panel?.isOpen?.() || !viewedPostArticle) {
+        feedFollowWatch = 0;
+        return;
+      }
+      syncAnchoredPanel();
+      feedFollowWatch = requestAnimationFrame(tick);
+    };
+    feedFollowWatch = requestAnimationFrame(tick);
+  }
   function scheduleFeedPosition() {
     if (feedPositionFrame) return;
     feedPositionFrame = requestAnimationFrame(() => {
       feedPositionFrame = 0;
-      if (shell.panel?.isOpen?.()) positionFeedPanel();
+      syncAnchoredPanel();
+      watchFeedFollow();
     });
   }
-  window.addEventListener('scroll', scheduleFeedPosition, { passive: true, capture: true });
+  window.addEventListener('scroll', (event) => {
+    const target = event.target;
+    if (target instanceof Element && target.closest('#facebook-dl-root')) return;
+    scheduleFeedPosition();
+    refreshActiveReel();
+  }, { passive: true, capture: true });
+  document.addEventListener('playing', (event) => {
+    if (event.target?.tagName === 'VIDEO') refreshActiveReel();
+  }, true);
   document.addEventListener('load', (event) => {
     const article = event.target?.closest?.('[role="article"].x-dl-feed-host');
     const entry = article?.querySelector('.x-dl-post-entry');
@@ -499,7 +611,7 @@
     const authors = [];
     for (const link of dialog.querySelectorAll('a[href]')) {
       const match = new URL(link.href, location.href).pathname.match(/^\/([a-zA-Z0-9_.]+)\/?$/);
-      if (match && !authors.some((item) => item.username === match[1])) authors.push({ username: match[1], displayName: link.textContent.trim() || match[1] });
+      if (match && !authors.some((item) => item.username === match[1])) authors.push({ username: match[1], displayName: linkVisibleName(link) || match[1] });
     }
     if (!authors.some((item) => item.username.toLowerCase() === viewedPost.author.username.toLowerCase())) return;
     if (authors.length > 1 && JSON.stringify(authors) !== JSON.stringify(viewedPost.authors)) {
@@ -508,11 +620,37 @@
       if (shell.panel?.isOpen?.()) renderCurrent();
     }
   }
+  const AD_LABEL = /^(?:赞助内容|赞助|贊助內容|贊助|Sponsored|Sponsorisé|Sponsorisiert|Gesponsert|Patrocinado|Publicidad|Promoted|広告|스폰서|推广内容|推广)$/i;
+  function isSponsoredArticle(article) {
+    const top = article.getBoundingClientRect().top;
+    for (const el of article.querySelectorAll('span, a, strong, abbr')) {
+      if (el.closest('.x-dl-post-entry, #facebook-dl-root')) continue;
+      if (el.children.length > 1) continue;
+      const value = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!value || value.length > 20 || !AD_LABEL.test(value)) continue;
+      const rect = el.getBoundingClientRect();
+      if (!rect.width || rect.height > 32) continue;
+      if (rect.top - top > 200) continue;
+      return true;
+    }
+    return false;
+  }
   function updateAdVisibility() {
-    // A virtualized feed owns its row heights and spacers. Restore legacy DOM
-    // overrides; ad filtering now happens before timeline data reaches that feed.
+    const hide = prefs.hideAds !== false;
     document.querySelectorAll('.x-dl-hidden-ad').forEach((element) => element.classList.remove('x-dl-hidden-ad'));
-    window.postMessage({ source: CONTENT_SOURCE, type: 'AD_SETTINGS', hideAds: prefs.hideAds === true }, location.origin);
+    if (hide) {
+      document.querySelectorAll('[role="article"]').forEach((article) => {
+        if (article.closest('#facebook-dl-root') || !isSponsoredArticle(article)) return;
+        article.classList.add('x-dl-hidden-ad');
+        article.classList.remove('x-dl-feed-host');
+        article.querySelector('.x-dl-post-entry')?.remove();
+        const pagelet = article.closest('[data-pagelet]');
+        if (pagelet && !pagelet.closest('#facebook-dl-root') && pagelet.querySelectorAll('[role="article"]').length === 1) {
+          pagelet.classList.add('x-dl-hidden-ad');
+        }
+      });
+    }
+    window.postMessage({ source: CONTENT_SOURCE, type: 'AD_SETTINGS', hideAds: hide }, location.origin);
   }
   function feedEntryEnabled() {
     return ['feed', 'profile'].includes(Model.routeFromUrl(location.href).kind);
@@ -531,7 +669,13 @@
       return;
     }
     document.querySelectorAll('[role="article"]').forEach((article) => {
-      if (article.closest('#facebook-dl-root') || article.classList.contains('x-dl-hidden-ad')) return;
+      if (article.closest('#facebook-dl-root') || article.classList.contains('x-dl-hidden-ad') || isReelsShelf(article)) {
+        if (!article.closest('#facebook-dl-root')) {
+          article.querySelector('.x-dl-post-entry')?.remove();
+          article.classList.remove('x-dl-feed-host');
+        }
+        return;
+      }
       const existing = article.querySelector('.x-dl-post-entry');
       if (!feedHasMedia(article)) {
         existing?.remove();
@@ -632,6 +776,7 @@
         title: '公告',
         pinned: ['仅保存你在 Facebook 页面中可正常访问、且有权保存的公开内容。'],
         recent: [
+          '1.0.1：信息流下载按钮随帖子滚动，面板跟着按钮移动；创作者与 Reel 作者会随当前内容更新。',
           '1.0.0：支持识别当前帖子、Reel、多图选择、信息流入口和个人主页扫描。',
           '可保存视频与图片；下载任务支持暂停、继续、取消和重试。',
           '默认隐藏首页赞助内容，可在设置中关闭。'
@@ -982,8 +1127,49 @@
     }
     return { ...media, type: 'image', id: String(media.id || 'media') + '-cover', imageCandidates: candidates, videoCandidates: [] };
   }
+  function collapseDuplicateMedia(post) {
+    if (!post?.media || post.media.length < 2 || typeof Model.uniqueMedia !== 'function') return post;
+    const media = Model.uniqueMedia(post.media).map((item, index) => ({ ...item, index: index + 1 }));
+    if (media.length === post.media.length) return post;
+    const kind = media.length > 1 ? 'carousel' : (media[0]?.type === 'video' ? 'video' : 'image');
+    return { ...post, media, kind, expectedMediaCount: media.length };
+  }
   function currentPost() {
-    return viewedPost || snapshot.post || null;
+    const source = collapseDuplicateMedia(viewedPost || snapshot.post || null);
+    const enriched = ensureVisibleTitle(ensureVisibleAuthor(source));
+    if (enriched && enriched !== source) {
+      if (viewedPost) viewedPost = enriched;
+      else if (snapshot.post) snapshot.post = enriched;
+    }
+    return enriched;
+  }
+  function postCoverShape(media) {
+    let width = Number(media?.width) || 0;
+    let height = Number(media?.height) || 0;
+    const sized = (media?.imageCandidates || []).find((item) => Number(item?.width) > 20 && Number(item?.height) > 20);
+    if (!(width > 20 && height > 20) && sized) {
+      width = Number(sized.width);
+      height = Number(sized.height);
+    }
+    if (!(width > 20 && height > 20)) {
+      const scope = viewedPostArticle?.isConnected ? viewedPostArticle : null;
+      let best = 0;
+      for (const el of scope?.querySelectorAll('img, video') || []) {
+        if (el.closest('#facebook-dl-root, .x-dl-post-entry')) continue;
+        const naturalWidth = el.naturalWidth || el.videoWidth || 0;
+        const naturalHeight = el.naturalHeight || el.videoHeight || 0;
+        if (naturalWidth < 80 || naturalHeight < 80 || naturalWidth * naturalHeight <= best) continue;
+        best = naturalWidth * naturalHeight;
+        width = naturalWidth;
+        height = naturalHeight;
+      }
+    }
+    if (!(width > 20 && height > 20)) return '';
+    const ratio = width / height;
+    if (ratio < 0.72) return 'is-portrait';
+    if (ratio < 0.98) return 'is-post';
+    if (ratio < 1.15) return 'is-square';
+    return '';
   }
   function pageType(post) {
     if ((post?.media || []).length > 1 || post?.kind === 'carousel') return 'carousel';
@@ -1090,9 +1276,305 @@
     return result;
   }
 
+  function isReelPage() {
+    return /^\/reels?\//i.test(location.pathname);
+  }
+  function decodeRepeated(value) {
+    let raw = String(value || '').replace(/\s+/g, ' ').trim();
+    for (let i = 0; i < 3 && /%[0-9A-Fa-f]{2}/.test(raw); i += 1) {
+      try {
+        const next = decodeURIComponent(raw.replace(/\+/g, ' '));
+        if (!next || next === raw) break;
+        raw = next;
+      } catch (_) { break; }
+    }
+    return raw.replace(/[\u200B-\u200D\uFEFF\u2060]/g, '').replace(/%[0-9A-Fa-f]{2}/g, '').replace(/\s+/g, ' ').trim();
+  }
+  function cleanHandle(value) {
+    const raw = decodeRepeated(value).replace(/^@/, '');
+    if (/^\d{5,}$/.test(raw)) return raw;
+    return /^[A-Za-z0-9.]{2,50}$/.test(raw) ? raw : '';
+  }
+  function cleanPersonName(value) {
+    return decodeRepeated(value).replace(/^@/, '');
+  }
+  function isPresenceLabel(value) {
+    const text = String(value || '').replace(/\s+/g, ' ').trim();
+    if (!text) return false;
+    if (/在线状态指示|線上狀態指示|在線狀態指示|active status indicator|online status indicator|activity status indicator/i.test(text)) return true;
+    return /^(在线|在線|活跃|活躍|active|online|active now)$/i.test(text);
+  }
+  function personNameFrom(value) {
+    let text = cleanPersonName(value)
+      .replace(/^[·•.\s]+/, '')
+      .replace(/\s*[·•]\s*(关注|追蹤|Following|Follow)$/i, '')
+      .replace(/(在线状态指示标|在线状态指示器|線上狀態指示標|線上狀態指示器|在線狀態指示標|在線狀態指示器|Active status indicator|Online status indicator|Activity status indicator)/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    text = text.replace(/^(在线|在線|活跃|活躍|Active now|Active|Online)\s+/i, '')
+      .replace(/\s+(在线|在線|活跃|活躍|Active now|Active|Online)$/i, '')
+      .replace(/\s*(?:的时间线|的時間線|的动态时报|的動態時報|'s timeline)$/i, '')
+      .trim();
+    if (!text || /%/.test(text) || isPresenceLabel(text) || /^(关注|追蹤|Following|Follow)$/i.test(text)) return '';
+    return text;
+  }
+  function linkVisibleName(link) {
+    const chunks = [];
+    const walk = (node) => {
+      if (!node) return;
+      if (node.nodeType === 3) {
+        const text = String(node.textContent || '').replace(/\s+/g, ' ').trim();
+        if (text) chunks.push(text);
+        return;
+      }
+      if (node.nodeType !== 1 || node === link) {
+        for (const child of node.childNodes || []) walk(child);
+        return;
+      }
+      const aria = node.getAttribute?.('aria-label') || '';
+      if (aria && isPresenceLabel(aria)) return;
+      const own = [...node.childNodes].filter((child) => child.nodeType === 3).map((child) => child.textContent).join('');
+      if (own.trim() && isPresenceLabel(own) && !node.childElementCount) return;
+      for (const child of node.childNodes) walk(child);
+    };
+    walk(link);
+    return personNameFrom(chunks.join(' ')) || personNameFrom(link.getAttribute?.('aria-label') || '');
+  }
+  function authorLabel(author) {
+    const display = personNameFrom(author?.displayName || '');
+    const handle = cleanHandle(author?.username || '');
+    if (display) return display;
+    if (handle && !/^\d+$/.test(handle)) return '@' + handle;
+    return '';
+  }
+  function rememberAuthor(authors, author) {
+    const username = cleanHandle(author?.username || '') || String(author?.username || '').trim();
+    if (!username) return;
+    const displayName = personNameFrom(author?.displayName || '');
+    const existing = authors.find((item) => String(item.username || '').toLowerCase() === username.toLowerCase());
+    if (!existing) {
+      authors.push({ ...author, username, displayName });
+      return;
+    }
+    if (displayName && !personNameFrom(existing.displayName)) existing.displayName = displayName;
+    if (!existing.avatar && author?.avatar) existing.avatar = author.avatar;
+    if (!existing.profileUrl && author?.profileUrl) existing.profileUrl = author.profileUrl;
+  }
+  function reelOverlayAvatar() {
+    const video = activeReelVideo();
+    const box = video?.getBoundingClientRect();
+    const scope = document.querySelector('[role="main"]') || document.body;
+    const region = box && box.width > 80 && box.height > 120 ? box : {
+      top: innerHeight * 0.4,
+      left: 0,
+      width: innerWidth,
+      height: innerHeight * 0.6,
+      bottom: innerHeight
+    };
+    let best = '';
+    let bestSize = 0;
+    const consider = (rect, href) => {
+      if (!href || Model.STATIC_HINT.test(href)) return;
+      const size = Math.min(rect.width, rect.height);
+      if (size < 24 || size > 80 || Math.abs(rect.width - rect.height) > 16) return;
+      if (rect.top < region.top + region.height * 0.42 || rect.bottom > region.bottom + 16) return;
+      if (rect.left < region.left - 12 || rect.left > region.left + region.width * 0.42) return;
+      if (size > bestSize) {
+        bestSize = size;
+        best = href;
+      }
+    };
+    for (const el of scope.querySelectorAll('img, image')) {
+      if (el.closest('#facebook-dl-root, .x-dl-post-entry')) continue;
+      let rect = el.getBoundingClientRect();
+      if (rect.width < 20 && el.parentElement) {
+        const parent = el.parentElement.getBoundingClientRect();
+        if (parent.width >= 24 && parent.width <= 84) rect = parent;
+      }
+      consider(rect, upgradeAvatarUrl(profileImageSource(el)));
+    }
+    for (const el of scope.querySelectorAll('div, span, a, i')) {
+      if (el.closest('#facebook-dl-root, .x-dl-post-entry')) continue;
+      const rect = el.getBoundingClientRect();
+      const match = (getComputedStyle(el).backgroundImage || '').match(/url\(["']?(https:[^"')]+)/i);
+      if (match) consider(rect, upgradeAvatarUrl(match[1]));
+    }
+    return best;
+  }
+  function nearbyReelAvatar(link) {
+    if (!link) return '';
+    const linkBox = link.getBoundingClientRect();
+    const roots = [];
+    let node = link;
+    for (let depth = 0; depth < 5 && node; depth += 1) {
+      roots.push(node);
+      node = node.parentElement;
+    }
+    let best = '';
+    let bestScore = -1;
+    for (const root of roots) {
+      for (const el of root.querySelectorAll('img, image')) {
+        const href = upgradeAvatarUrl(profileImageSource(el));
+        if (!href || Model.STATIC_HINT.test(href)) continue;
+        let rect = el.getBoundingClientRect();
+        if (rect.width < 20 && el.parentElement) {
+          const parent = el.parentElement.getBoundingClientRect();
+          if (parent.width >= 20 && parent.width <= 88) rect = parent;
+        }
+        const size = Math.min(rect.width, rect.height);
+        if (size < 20 || size > 88 || Math.abs(rect.width - rect.height) > 18) continue;
+        const inside = link.contains(el);
+        const beside = rect.left <= linkBox.left + 8 && linkBox.left - rect.left < 88 && rect.right <= linkBox.right;
+        if (!inside && !beside) continue;
+        if (Math.abs((rect.top + rect.height / 2) - (linkBox.top + linkBox.height / 2)) > 36) continue;
+        const score = size + (beside ? 40 : 0);
+        if (score > bestScore) {
+          bestScore = score;
+          best = href;
+        }
+      }
+      if (best) return best;
+    }
+    const host = link.parentElement?.parentElement || link.parentElement;
+    for (const el of host?.querySelectorAll('div, span, a, i') || []) {
+      const rect = el.getBoundingClientRect();
+      const size = Math.min(rect.width, rect.height);
+      if (size < 24 || size > 80 || Math.abs(rect.width - rect.height) > 14) continue;
+      if (Math.abs(rect.top - linkBox.top) > 32 || rect.left > linkBox.left + 4) continue;
+      const match = (getComputedStyle(el).backgroundImage || '').match(/url\(["']?(https:[^"')]+)/i);
+      const href = match ? upgradeAvatarUrl(match[1]) : '';
+      if (href && !Model.STATIC_HINT.test(href)) return href;
+    }
+    return '';
+  }
+  function headerAuthor(article) {
+    if (!article?.querySelectorAll) return null;
+    const media = feedMediaBox(article);
+    const host = article.getBoundingClientRect();
+    let best = null;
+    for (const link of article.querySelectorAll('a[href]')) {
+      if (link.closest('#facebook-dl-root, .x-dl-post-entry')) continue;
+      const route = Model.routeFromUrl(link.href);
+      if (route.kind !== 'profile') continue;
+      const box = link.getBoundingClientRect();
+      if (box.width < 8 || box.height < 8) continue;
+      if (media) {
+        if (box.top >= media.top - 4) continue;
+      } else if (box.top > host.top + 140) continue;
+      const displayName = linkVisibleName(link);
+      if (!displayName || displayName.length > 80 || /原声|音频|music|^reel/i.test(displayName)) continue;
+      const username = cleanHandle(route.username || Model.usernameFromUrl(link.href)) || route.username || '';
+      const score = Math.min(box.width, 220) + Math.max(0, 400 - Math.max(0, box.top - host.top));
+      if (!best || score > best.score) best = { score, author: { username, displayName, profileUrl: link.href } };
+    }
+    return best?.author || null;
+  }
+  function visiblePageAuthor() {
+    const scope = document.querySelector('[role="main"]') || document.body;
+    const video = activeReelVideo();
+    const videoBox = video?.getBoundingClientRect();
+    if (!videoBox) return null;
+    let best = null;
+    for (const link of scope.querySelectorAll('a[href]')) {
+      if (link.closest('#facebook-dl-root, .x-dl-post-entry')) continue;
+      const route = Model.routeFromUrl(link.href);
+      if (route.kind !== 'profile') continue;
+      const label = linkVisibleName(link);
+      if (!label || label.length > 80 || /原声|音频|music|^reel/i.test(label)) continue;
+      const box = link.getBoundingClientRect();
+      if (box.width < 12 || box.height < 10) continue;
+      const lower = videoBox.top + videoBox.height * 0.45;
+      if (box.bottom < lower || box.top > videoBox.bottom + 4) continue;
+      if (box.left < videoBox.left - 12 || box.right > videoBox.right + 80) continue;
+      const username = cleanHandle(route.username || Model.usernameFromUrl(link.href));
+      const displayName = label;
+      if (!username && !displayName) continue;
+      const avatar = nearbyReelAvatar(link) || articleAvatarUrl(link.parentElement || link, username) || reelOverlayAvatar();
+      const score = (avatar ? 400 : 0) + Math.min(box.width, 120);
+      if (!best || score > best.score) best = { score, author: { username, displayName, avatar, profileUrl: link.href } };
+    }
+    return best?.author || null;
+  }
+  function ensureVisibleAuthor(post) {
+    if (!post) return post;
+    const found = isReelPage()
+      ? visiblePageAuthor()
+      : headerAuthor(viewedPostArticle?.isConnected ? viewedPostArticle : null);
+    const current = post.author || {};
+    const displayName = personNameFrom(found?.displayName || '') || personNameFrom(current.displayName || '');
+    const username = cleanHandle(found?.username || current.username || '') || found?.username || current.username || '';
+    if (!found && displayName === personNameFrom(current.displayName || '') && (displayName || '') === (current.displayName || '')) return post;
+    if (!displayName && !username) return post;
+    const author = {
+      ...current,
+      ...(found || {}),
+      username: username || current.username || '',
+      displayName,
+      avatar: found?.avatar || current.avatar || '',
+      profileUrl: found?.profileUrl || current.profileUrl || ''
+    };
+    const same = current.displayName === author.displayName && current.username === author.username && current.profileUrl === author.profileUrl;
+    if (same && !found) return post;
+    return { ...post, author, authors: [author] };
+  }
+  function genericTitle(post) {
+    const title = String(post?.title || '').trim();
+    const id = String(post?.shortcode || post?.id || '');
+    return !title || title === id || title === 'Post ' + id || /^Post\s+\d/i.test(title);
+  }
+  function visibleReelCaption(author) {
+    const scope = document.querySelector('[role="main"]') || document.body;
+    const video = activeReelVideo();
+    const videoBox = video?.getBoundingClientRect();
+    const skip = new Set([cleanPersonName(author?.displayName), cleanHandle(author?.username)].filter(Boolean).map((value) => value.toLowerCase()));
+    const ui = /^(关注|追蹤|Following|Follow|原声|原创音频|音频|翻译|展开|收起|隐藏|隐藏翻译|查看翻译|See more|See less|See translation|Sponsored|赞助|赞助内容|Reels?|赞|评论|分享|发送|Like|Comment|Share|AI\s*内容|AI content)$/i;
+    const candidates = [];
+    for (const el of scope.querySelectorAll('span, div, h1, h2')) {
+      if (el.closest('#facebook-dl-root') || el.tagName === 'BUTTON') continue;
+      if ([...el.children].some((child) => cleanPersonName(child.textContent || '').length > 16)) continue;
+      let value = cleanPersonName(el.textContent || '');
+      value = value.replace(/(?:\.{2,3}|…)+\s*(展开|See more|查看更多)?$/i, '').replace(/\s*(展开|See more|查看更多)$/i, '').trim();
+      if (value.length < 2 || value.length > 240) continue;
+      if (ui.test(value) || isPresenceLabel(value) || skip.has(value.toLowerCase())) continue;
+      if (/原声|原创音频|original audio|AI\s*内容|AI content/i.test(value) && value.length < 48) continue;
+      if (/^[\d.,]+\s*[万亿kKmM]?$/.test(value) || /^[#@·•.\s]+$/.test(value)) continue;
+      const box = el.getBoundingClientRect();
+      if (box.width < 12 || box.height < 8 || box.height > 160) continue;
+      if (videoBox) {
+        if (box.top < videoBox.top + videoBox.height * 0.35 || box.bottom > videoBox.bottom + 16) continue;
+        if (box.left < videoBox.left - 16 || box.left > videoBox.left + videoBox.width * 0.75) continue;
+      } else if (box.top < innerHeight * 0.4 || box.top > innerHeight) continue;
+      candidates.push({ value, top: box.top });
+    }
+    candidates.sort((a, b) => (Math.abs(a.top - b.top) > 24 ? b.top - a.top : b.value.length - a.value.length));
+    return candidates[0]?.value || '';
+  }
+  let reelCaptionTimer = 0;
+  function scheduleReelCaption() {
+    if (reelCaptionTimer) return;
+    let tries = 0;
+    const tick = () => {
+      reelCaptionTimer = 0;
+      if (!isReelPage() || !shell.panel?.isOpen?.()) return;
+      const source = viewedPost || snapshot.post;
+      if (!genericTitle(source)) return;
+      if (visibleReelCaption(source?.author)) {
+        renderCurrent();
+        return;
+      }
+      if (tries++ < 8) reelCaptionTimer = setTimeout(tick, 300);
+    };
+    reelCaptionTimer = setTimeout(tick, 200);
+  }
+  function ensureVisibleTitle(post) {
+    if (!post) return post;
+    const caption = isReelPage() || genericTitle(post) ? visibleReelCaption(post.author) : '';
+    if (caption) return { ...post, title: caption.slice(0, 100), caption };
+    return post;
+  }
   function syncTabs() {
     const isProfile = snapshot.kind === 'profile' && !viewedPost;
-    const hasCreator = Boolean(viewedPost) || isProfile || Boolean(snapshot.creator?.username || snapshot.post?.author?.username);
+    const hasCreator = Boolean(viewedPost) || isProfile || snapshot.kind === 'post' || Boolean(snapshot.creator?.username || snapshot.post?.author?.username);
     tabsEl.classList.toggle('hidden', isProfile || !hasCreator);
     if (!hasCreator && activeMode === 'creator') activeMode = 'current';
     if (isProfile && activeMode !== 'current' && activeMode !== 'creator') activeMode = 'creator';
@@ -1125,7 +1607,7 @@
   function setMediaPreview(img, media, failed) {
     const urls = previewUrls(media);
     let index = 0;
-    img.referrerPolicy = 'no-referrer';
+    img.referrerPolicy = 'strict-origin-when-cross-origin';
     img.addEventListener('error', () => {
       index += 1;
       if (index < urls.length) img.src = urls[index];
@@ -1140,7 +1622,7 @@
 
   function showCreatorVideoCover(slot, media, placeholder) {
     if (!['video', 'gif'].includes(media?.type)) return;
-    const url = Model.httpsUrl(pickResource(media)?.url || '');
+    const url = Model.httpsUrl(media?._liveSrc || pickResource(media)?.url || '');
     if (!url) return;
     const video = node(slot, 'video', 'x-creator-cover');
     video.muted = true;
@@ -1156,10 +1638,120 @@
     video.src = url;
   }
 
+  function activeReelVideo() {
+    let best = null;
+    let bestScore = 0;
+    for (const video of document.querySelectorAll('video')) {
+      if (video.closest('#facebook-dl-root')) continue;
+      const box = video.getBoundingClientRect();
+      const height = Math.min(box.bottom, innerHeight) - Math.max(box.top, 0);
+      const width = Math.min(box.right, innerWidth) - Math.max(box.left, 0);
+      if (height < 80 || width < 40) continue;
+      let score = height * width;
+      if (!video.paused && !video.ended) score += 1e9;
+      if (score > bestScore) {
+        bestScore = score;
+        best = video;
+      }
+    }
+    return best;
+  }
+  const reelFrameState = new WeakMap();
+  function captureReelFrame(video) {
+    if (!video) return '';
+    const state = reelFrameState.get(video);
+    if (state?.url) return state.url;
+    if (state?.failed) return '';
+    if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) return '';
+    const canvas = document.createElement('canvas');
+    const scale = Math.min(1, 720 / video.videoHeight);
+    canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+    canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+    try {
+      canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+      const url = canvas.toDataURL('image/jpeg', 0.82);
+      if (!url || url.length < 32) throw new Error('empty frame');
+      reelFrameState.set(video, { url });
+      return url;
+    } catch (_) {
+      reelFrameState.set(video, { failed: true });
+      return '';
+    }
+  }
+  function armReelFrame(video) {
+    if (!video || video.__xDlFrameWatch) return;
+    video.__xDlFrameWatch = true;
+    video.addEventListener('loadeddata', () => refreshActiveReel(true));
+  }
+  function reelPosterUrl(video) {
+    if (!video) return '';
+    const direct = Model.httpsUrl(video.poster || '');
+    if (direct) return direct;
+    let node = video.parentElement;
+    for (let depth = 0; depth < 8 && node && node !== document.body; depth += 1) {
+      if (node.querySelectorAll('video').length > 1) break;
+      let best = '';
+      let bestScore = 0;
+      for (const img of node.querySelectorAll('img')) {
+        const url = Model.httpsUrl(img.currentSrc || img.src || '');
+        if (!url || Model.STATIC_HINT.test(url)) continue;
+        const natural = (img.naturalWidth || 0) * (img.naturalHeight || 0);
+        const box = img.getBoundingClientRect();
+        const visible = Math.max(0, box.width) * Math.max(0, box.height);
+        const score = Math.max(natural, visible);
+        if (natural < 200 * 200 && visible < 100 * 140) continue;
+        if (score > bestScore) {
+          bestScore = score;
+          best = url;
+        }
+      }
+      if (best) return best;
+      node = node.parentElement;
+    }
+    return '';
+  }
+  let activeReelKey = '';
+  function refreshActiveReel(force) {
+    if (!isReelPage() || !shell.panel?.isOpen?.()) return;
+    const video = activeReelVideo();
+    const key = location.pathname + '|' + (video?.currentSrc || video?.poster || '');
+    if (!video || key === '|') return;
+    const state = reelFrameState.get(video);
+    const settled = Boolean(state?.url || state?.failed);
+    const author = visiblePageAuthor();
+    const authorKey = [author?.username || '', author?.displayName || '', author?.avatar || ''].join('|');
+    const reelKey = key + '|' + authorKey;
+    if (!force && reelKey === activeReelKey && settled) return;
+    activeReelKey = reelKey;
+    renderCurrent();
+    if (activeMode === 'creator') renderCreator();
+  }
+  async function downloadReelCover(post, media) {
+    const live = activeReelVideo();
+    const frame = captureReelFrame(live) || media?._frame || '';
+    if (frame.startsWith('data:')) {
+      const filename = await taskFilename(post, { ...media, type: 'image' }, {
+        url: frame,
+        width: live?.videoWidth || media?.width || 0,
+        height: live?.videoHeight || media?.height || 0
+      });
+      const bytes = await (await fetch(frame)).arrayBuffer();
+      await send('FACEBOOK_DL_DOWNLOAD_BYTES', { filename, bytes });
+      setStatus(t('addedTasks', { count: 1 }), 'info');
+      return;
+    }
+    const poster = reelPosterUrl(live) || Model.httpsUrl(media?.posterUrl || '');
+    if (!poster) {
+      setStatus(t('noCover'), 'warn');
+      return;
+    }
+    await enqueueMedia(post, [coverMediaFrom({ ...media, posterUrl: poster, imageCandidates: [{ url: poster, source: 'poster' }] })]);
+  }
   function renderCurrent() {
     currentBody.replaceChildren();
     const post = currentPost();
-    if (snapshot.kind === 'post' && post) {
+    if (isReelPage() && genericTitle(post)) scheduleReelCaption();
+    if (snapshot.kind === 'post' && post && !isReelPage()) {
       button(currentBody, t(threadScanning ? 'batchStopThread' : 'batchThread'), 'x-mini-button', () => {
         if (threadScanning) { threadScanToken += 1; threadScanning = false; renderView(); }
         else downloadThread().catch(error => setStatus(error.message,'error'));
@@ -1185,16 +1777,51 @@
       mediaSelectionPost = selectionPost;
       selectedMedia = new Set(post.media.map((item) => downloadKey(post, item)));
     }
-    const card = node(currentBody, 'div', 'x-dl-video-card');
-    const coverCol = node(card, 'div', 'x-dl-cover-column');
-    const wrap = node(coverCol, 'div', 'x-dl-cover-wrap');
-    if (pageType(post) === 'video' || pageType(post) === 'gif') wrap.classList.add('is-reel');
-    const img = node(wrap, 'img', 'x-dl-cover');
-    img.referrerPolicy = 'no-referrer';
+    const reel = isReelPage();
+    const card = node(currentBody, 'div', 'x-dl-video-card' + (reel ? ' is-reel-card' : ''));
     const first = post.media[0];
-    setMediaPreview(img, first, () => node(wrap, 'div', 'x-dl-cover-ph'));
-    if (first?.type === 'video' && (first.posterUrl || first.imageCandidates?.length)) {
-      button(coverCol, t('downloadCover'), 'x-dl-cover-download', () => enqueueMedia(post, [coverMediaFrom(first)]));
+    if (reel && first) {
+      const live = activeReelVideo();
+      armReelFrame(live);
+      const frame = captureReelFrame(live);
+      const poster = reelPosterUrl(live);
+      const key = location.pathname + '|' + (live?.currentSrc || live?.poster || '');
+      if (live && key !== '|') activeReelKey = key;
+      if (frame) first._frame = frame;
+      if (poster) {
+        first.posterUrl = poster;
+        first.imageCandidates = [{ url: poster, source: 'poster' }];
+      }
+      const coverCol = node(card, 'div', 'x-dl-cover-column');
+      const wrap = node(coverCol, 'div', 'x-dl-cover-wrap is-reel');
+      const img = node(wrap, 'img', 'x-dl-cover');
+      img.alt = '';
+      img.referrerPolicy = 'strict-origin-when-cross-origin';
+      if (frame) img.src = frame;
+      else {
+        setMediaPreview(img, first, () => {
+          const placeholder = node(wrap, 'div', 'x-dl-cover-ph');
+          if (first.type === 'video') showCreatorVideoCover(wrap, first, placeholder);
+        });
+      }
+      button(coverCol, t('feedPostEntry'), 'x-dl-cover-download', () => {
+        downloadReelCover(post, first).catch((error) => setStatus(error.message, 'error'));
+      });
+    } else {
+      const coverCol = node(card, 'div', 'x-dl-cover-column');
+      const wrap = node(coverCol, 'div', 'x-dl-cover-wrap');
+      const shape = postCoverShape(first);
+      if (shape) wrap.classList.add(shape);
+      else if (pageType(post) === 'video' || pageType(post) === 'gif') wrap.classList.add('is-reel');
+      const img = node(wrap, 'img', 'x-dl-cover');
+      img.referrerPolicy = 'strict-origin-when-cross-origin';
+      setMediaPreview(img, first, () => {
+        const placeholder = node(wrap, 'div', 'x-dl-cover-ph');
+        if (first?.type === 'video') showCreatorVideoCover(wrap, first, placeholder);
+      });
+      if (first?.type === 'video' && (first.posterUrl || first.imageCandidates?.length)) {
+        button(coverCol, t('feedPostEntry'), 'x-dl-cover-download', () => enqueueMedia(post, [coverMediaFrom(first)]));
+      }
     }
     const side = node(card, 'div', 'x-dl-video-side');
     const content = node(side, 'div', 'x-dl-video-content');
@@ -1202,11 +1829,12 @@
     const authorLine = node(content, 'div', 'x-dl-video-author');
     const authors = post.authors?.length ? post.authors : [post.author];
     authors.forEach((author) => {
-      const authorName = String(author?.username || '').replace(/^@/, '').trim();
-      if (!authorName || /[#\s]/.test(authorName)) return;
-      const authorLink = node(authorLine, 'a', 'x-dl-author-link', '@' + authorName);
-      authorLink.href = Model.profileUrl(authorName);
-      authorLink.title = author.displayName || authorName;
+      const label = authorLabel(author);
+      const handle = cleanHandle(author?.username || '');
+      if (!label) return;
+      const authorLink = node(authorLine, 'a', 'x-dl-author-link', label);
+      authorLink.href = author?.profileUrl || (handle ? Model.profileUrl(handle) : location.href);
+      authorLink.title = label;
     });
     if (!authorLine.childNodes?.length) authorLine.remove?.();
     const sub = node(content, 'div', 'x-dl-video-sub', [pageTypeLabel(post), t('mediaCount', { count: post.media.length })].filter(Boolean).join(' · '));
@@ -1243,8 +1871,6 @@
     } else {
       const tools = node(currentBody, 'div', 'x-list-toolbar');
       button(tools, t('selectAllShort'), 'x-mini-button', () => { selectedMedia = new Set(post.media.map((item) => downloadKey(post, item))); renderCurrent(); });
-      button(tools, t('selectImages'), 'x-mini-button', () => { selectedMedia = new Set(post.media.filter((item) => item.type === 'image').map((item) => downloadKey(post, item))); renderCurrent(); });
-      button(tools, t('selectVideos'), 'x-mini-button', () => { selectedMedia = new Set(post.media.filter((item) => item.type === 'video').map((item) => downloadKey(post, item))); renderCurrent(); });
       button(tools, t('selectNewShort'), 'x-mini-button', async () => {
         const selectionToken = viewedPostToken;
         const done = await completedKeys();
@@ -1267,7 +1893,8 @@
           bar.textContent = t('selectedOf', { selected: selectedMedia.size, total: post.media.length });
           download.disabled = selectedMedia.size === 0;
         });
-        const thumb = node(row, 'img', 'x-media-thumb');
+        const shape = postCoverShape(media);
+        const thumb = node(row, 'img', 'x-media-thumb' + (shape ? ' ' + shape : ''));
         setMediaPreview(thumb, media, () => node(row, 'span', 'x-media-thumb x-dl-cover-ph')); 
         node(row, 'span', 'x-media-meta', (media.index + ' / ' + post.media.length) + ' · ' + (media.type === 'video' ? t('pageTypeVideo') : t('pageTypeImage')) + (media.width ? ' · ' + media.width + 'x' + media.height : ''));
       });
@@ -1373,17 +2000,53 @@
     return '';
   }
 
+  function isPlaceholderTitle(value) {
+    const text = String(value || '').replace(/\s+/g, ' ').trim();
+    return !text || /方块预览|方塊預覽|tile preview|preview tile|^reels?(?:\s+preview)?$/i.test(text);
+  }
+  function reelTileCaption(link) {
+    let best = '';
+    for (const el of link.querySelectorAll('span')) {
+      if (el.children.length) continue;
+      const value = String(el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (value.length < 2 || value.length > 140 || isPlaceholderTitle(value)) continue;
+      if (/^[\d,.\s]+(?:\s*[万亿kKmM])?$/.test(value)) continue;
+      if (value.length > best.length) best = value;
+    }
+    return best;
+  }
+  function tileCoverImage(link) {
+    const host = link.getBoundingClientRect();
+    let best = null;
+    let bestArea = 0;
+    for (const img of link.querySelectorAll('img')) {
+      const src = img.currentSrc || img.src || '';
+      if (!src || Model.looksLikeAvatar(src) || Model.STATIC_HINT.test(src)) continue;
+      const box = img.getBoundingClientRect();
+      const width = box.width || img.clientWidth || 0;
+      const height = box.height || img.clientHeight || 0;
+      if (width < Math.max(48, host.width * 0.45) || height < Math.max(48, host.height * 0.35)) continue;
+      const area = width * height;
+      if (area > bestArea) {
+        bestArea = area;
+        best = img;
+      }
+    }
+    return best;
+  }
   function creatorPostTitle(link, card, image, shortcode) {
+    const tileCaption = link ? reelTileCaption(link) : '';
+    if (tileCaption) return tileCaption.slice(0, 120);
     const tweetText = card?.querySelector?.('[data-ad-preview="message"], [data-ad-comet-preview="message"]')?.innerText
       || link?.closest?.('[role="article"]')?.querySelector?.('[data-ad-preview="message"]')?.innerText;
     if (tweetText) {
       const line = String(tweetText).replace(/\s+/g, ' ').trim().slice(0, 120);
-      if (line) return line;
+      if (line && !isPlaceholderTitle(line)) return line;
     }
-    const candidates = [link.getAttribute('aria-label'), link.getAttribute('title'), image?.alt];
+    const candidates = [link?.getAttribute?.('aria-label'), link?.getAttribute?.('title'), image?.alt];
     for (const candidate of candidates) {
       const value = String(candidate || '').trim();
-      if (value && value.length <= 500 && !/^tweet\b/i.test(value)) return value;
+      if (value && value.length <= 500 && !/^tweet\b/i.test(value) && !isPlaceholderTitle(value)) return value;
     }
     return t('facebookPostFallback', { id: shortcode });
   }
@@ -1411,13 +2074,37 @@
       post.timelineIndex = undefined;
       post.onPage = false;
     }
-    const articles = (document.querySelector('[role="main"]') || document)
-      .querySelectorAll('[role="article"]');
+    const main = document.querySelector('[role="main"]') || document;
+    const tab = profileTab();
+    const sources = tab === 'reels' ? [] : [...main.querySelectorAll('[role="article"]')]
+      .filter((article) => !article.closest('#facebook-dl-root') && profileArticleCollectible(article))
+      .map((article) => ({ article, link: null, tile: false }));
+    if (tab === 'photos' || tab === 'reels') {
+      const selector = tab === 'photos'
+        ? 'a[href*="/photo"], a[href*="fbid="], a[href*="/photos/"]'
+        : 'a[href*="/reel"]';
+      const links = [...main.querySelectorAll(selector)].filter((link) => {
+        if (link.closest('#facebook-dl-root')) return false;
+        if (tab !== 'reels' && link.closest('[role="article"]')) return false;
+        const box = link.getBoundingClientRect();
+        if (tab === 'reels') return box.width >= 80 && box.height >= 110 && box.height >= box.width * 0.85;
+        return box.width >= 64 && box.height >= 64;
+      });
+      links.sort((a, b) => {
+        const ra = a.getBoundingClientRect();
+        const rb = b.getBoundingClientRect();
+        if (Math.abs(ra.top - rb.top) > 28) return ra.top - rb.top;
+        return ra.left - rb.left;
+      });
+      links.filter((link) => !links.some((other) => other !== link && other.contains(link))).forEach((link) => {
+        sources.push({ article: link, link, tile: tab === 'reels' });
+      });
+    }
     let timelineIndex = 0;
-    for (const article of articles) {
+    for (const source of sources) {
+      const article = source.article;
       if (seen.size >= 300) break;
-      if (article.closest('#facebook-dl-root') || !profileArticleCollectible(article)) continue;
-      const postLink = [...article.querySelectorAll('a[href]')].find((link) => {
+      const postLink = source.link || [...article.querySelectorAll('a[href]')].find((link) => {
         try {
           const linked = Model.routeFromUrl(link.href);
           if (linked.kind !== 'post' || !linked.shortcode) return false;
@@ -1437,13 +2124,13 @@
       const pinned = isPinnedArticle(article);
       const existing = creatorPosts.get(route.shortcode);
       const card = creatorPostCard(postLink) || article;
-      const image = [...article.querySelectorAll('img')].find((img) => {
+      const image = source.tile ? tileCoverImage(article) : ([...article.querySelectorAll('img')].find((img) => {
           const src = img.currentSrc || img.src || '';
           return src && !Model.looksLikeAvatar(src) && !Model.STATIC_HINT.test(src) && (img.naturalWidth || img.clientWidth || 0) >= 64;
         })
         || postLink.querySelector('img')
-        || card.querySelector('img');
-      const videoEl = article.querySelector('video');
+        || card.querySelector('img'));
+      const videoEl = source.tile ? null : article.querySelector('video');
       const posterUrl = Model.allowedMediaUrl(videoEl?.poster || '')
         || imageFromNode(image)
         || imageFromNode(article)
@@ -1481,7 +2168,7 @@
       }) : [{
         id: route.shortcode + '-1',
         index: 1,
-        type: article.querySelector('video') ? 'video' : 'image',
+        type: source.tile || article.querySelector('video') ? 'video' : 'image',
         posterUrl: allowedPoster || posterUrl || '',
         imageCandidates,
         videoCandidates: []
@@ -1493,7 +2180,7 @@
         shortcode: route.shortcode,
         pageUrl: existing?.pageUrl || pageUrl,
         title: title || existing?.title || route.shortcode,
-        kind: existing?.kind || (article.querySelector('video') ? 'video' : 'image'),
+        kind: source.tile ? 'video' : (existing?.kind || (article.querySelector('video') ? 'video' : 'image')),
         publishTime: publishTime || existing?.publishTime || '',
         pinned,
         timelineIndex: order,
@@ -1503,7 +2190,11 @@
       });
     }
     mergeCreatorPosts(posts);
-    creatorCategories.set(category, new Set(mergePageOrder(previousOrder, [...seen]).filter((id) => postHasMedia(creatorPosts.get(id)))));
+    const overlap = previousOrder.some((id) => seen.has(id));
+    const ordered = tab === 'reels' && seen.size
+      ? [...seen, ...previousOrder.filter((id) => !seen.has(id) && postMatchesProfileTab(creatorPosts.get(id)))]
+      : (overlap || !seen.size ? mergePageOrder(previousOrder, [...seen]) : [...seen]);
+    creatorCategories.set(category, new Set(ordered.filter((id) => postHasMedia(creatorPosts.get(id)))));
     pruneTextOnlyCreatorPosts(category);
   }
 
@@ -1578,18 +2269,119 @@
   }
 
   function upgradeAvatarUrl(url) {
-    return Model.httpsUrl(url);
+    const href = Model.httpsUrl(url);
+    if (!href) return '';
+    const bump = (value) => String(value || '').replace(/([sp])(\d{2,4})x(\d{2,4})/gi, (token, kind, width, height) => {
+      if (Number(width) >= 480 || Number(height) >= 480) return token;
+      return kind + '720x720';
+    });
+    try {
+      const parsed = new URL(href);
+      ['stp', 'cstp', 'ctp'].forEach((key) => {
+        if (parsed.searchParams.has(key)) parsed.searchParams.set(key, bump(parsed.searchParams.get(key)));
+      });
+      return parsed.href;
+    } catch (_) {
+      return href;
+    }
   }
 
+  function profileImageSource(el) {
+    const animated = el.href && typeof el.href === 'object' ? el.href.baseVal : '';
+    let best = '';
+    let bestScale = 0;
+    for (const part of String(el.srcset || el.getAttribute?.('srcset') || '').split(',')) {
+      const bits = part.trim().split(/\s+/);
+      const scale = /w$/i.test(bits[1] || '') ? parseFloat(bits[1]) / 160 : (parseFloat(bits[1]) || 1);
+      if (bits[0] && scale >= bestScale) {
+        bestScale = scale;
+        best = bits[0];
+      }
+    }
+    return best || el.currentSrc || el.src || animated
+      || el.getAttributeNS?.('http://www.w3.org/1999/xlink', 'href')
+      || el.getAttribute('xlink:href')
+      || el.getAttribute('href')
+      || '';
+  }
+  function articleAvatarUrl(article, username) {
+    if (!article) return '';
+    const host = article.getBoundingClientRect();
+    const name = String(username || '').replace(/^@/, '').trim().toLowerCase();
+    const scopes = [];
+    if (name) {
+      const link = [...article.querySelectorAll('a[href]')].find((el) => {
+        if (el.closest('.x-dl-post-entry')) return false;
+        return Model.usernameFromUrl(el.href || '').toLowerCase() === name;
+      });
+      if (link) scopes.push(link);
+    }
+    scopes.push(article);
+    for (const scope of scopes) {
+      let best = '';
+      let bestScore = -1;
+      for (const el of scope.querySelectorAll('img, image')) {
+        if (el.closest('.x-dl-post-entry, #facebook-dl-root')) continue;
+        const href = upgradeAvatarUrl(profileImageSource(el));
+        if (!href || Model.STATIC_HINT.test(href)) continue;
+        let rect = el.getBoundingClientRect();
+        let node = el;
+        for (let depth = 0; depth < 3 && rect.width < 24; depth += 1) {
+          node = node.parentElement;
+          if (!node || !scope.contains(node)) break;
+          const next = node.getBoundingClientRect();
+          if (next.width > 96 || next.height > 96 || Math.abs(next.width - next.height) > 20) break;
+          rect = next;
+        }
+        if (rect.width < 24 || rect.height < 24 || rect.width > 96 || rect.height > 96) continue;
+        if (Math.abs(rect.width - rect.height) > 16) continue;
+        if (scope === article && rect.top - host.top > 110) continue;
+        const score = Math.min(rect.width, rect.height) + (scope === article ? 0 : 200);
+        if (score > bestScore) {
+          bestScore = score;
+          best = href;
+        }
+      }
+      if (!best && scope !== article) {
+        const nodes = [scope, ...scope.querySelectorAll('div, span')].slice(0, 8);
+        for (const el of nodes) {
+          const match = (getComputedStyle(el).backgroundImage || '').match(/url\(["']?(https:[^"')]+)/i);
+          const href = match ? upgradeAvatarUrl(match[1]) : '';
+          if (href && !Model.STATIC_HINT.test(href)) return href;
+        }
+      }
+      if (best) return best;
+    }
+    return '';
+  }
+  function profileImageBox(el) {
+    let node = el;
+    for (let depth = 0; depth < 4 && node; depth += 1) {
+      const rect = node.getBoundingClientRect();
+      if (rect.width >= 48 && rect.height >= 48) return rect;
+      node = node.parentElement;
+    }
+    return el.getBoundingClientRect();
+  }
   function profileHeaderDetails() {
     let avatar = upgradeAvatarUrl(snapshot.creator?.avatar || '');
     const header = document.querySelector('[role="main"]');
-    for (const img of header?.querySelectorAll('img') || []) {
-      const src = img.currentSrc || img.src || '';
-      const size = img.clientWidth || img.naturalWidth || 0;
-      if (Model.looksLikeAvatar(src) && size >= 48) {
-        avatar = upgradeAvatarUrl(src);
-        break;
+    const mainTop = header?.getBoundingClientRect().top || 0;
+    let bestScore = -1;
+    for (const el of header?.querySelectorAll('img, image') || []) {
+      if (el.closest('#facebook-dl-root, [role="article"], .x-dl-post-entry')) continue;
+      const href = upgradeAvatarUrl(profileImageSource(el));
+      if (!href || Model.STATIC_HINT.test(href)) continue;
+      const rect = profileImageBox(el);
+      const width = rect.width || 0;
+      const height = rect.height || 0;
+      if (width < 72 || height < 72 || width > 260 || height > 260) continue;
+      if (Math.abs(width - height) > Math.max(width, height) * 0.35) continue;
+      if (rect.top - mainTop > 560) continue;
+      const score = Math.min(width, height);
+      if (score > bestScore) {
+        bestScore = score;
+        avatar = href;
       }
     }
     const textBlob = String(header?.innerText || '').slice(0, 2500);
@@ -1598,26 +2390,72 @@
     return { avatar, total };
   }
 
+  let creatorViewRendered = '';
+  function creatorViewKey() {
+    const rows = visibleCreatorPosts().map((post) => [
+      post.shortcode || post.id || '',
+      post.title || '',
+      post.kind || '',
+      post.media?.[0]?.type || '',
+      post.media?.[0]?.posterUrl || '',
+      creatorReady(post) ? 1 : 0
+    ].join('\u001f'));
+    const post = snapshot.kind === 'profile' ? null : ensureVisibleAuthor(viewedPost || snapshot.post);
+    const author = post?.author || {};
+    const avatar = isReelPage()
+      ? (reelOverlayAvatar() || author.avatar || '')
+      : (author.avatar || articleAvatarUrl(viewedPostArticle, author.username) || '');
+    const identity = [post?.shortcode || post?.id || '', author.username || '', author.displayName || '', avatar].join('|');
+    return [creatorKey, profileTab(), creatorPreparing ? 1 : 0, creatorVisibleLimit, selectedPosts.size, identity, rows.join('\u001e')].join('#');
+  }
   function renderCreator() {
+    const viewKey = creatorViewKey();
+    if (viewKey === creatorViewRendered && creatorBody.childElementCount) return;
+    creatorViewRendered = viewKey;
     const scrollTop = creatorBody.querySelector('.x-creator-list')?.scrollTop || 0;
     creatorBody.replaceChildren();
     Object.assign(creatorFilters, { type: 'all', from: '', to: '', min: '', max: '', limit: '' });
     const availableIds = new Set(filteredCreatorPosts().map(post => post.shortcode || post.id));
     selectedPosts = new Set([...selectedPosts].filter(id => availableIds.has(id)));
     if (snapshot.kind !== 'profile') {
-      const post = viewedPost || snapshot.post;
+      const post = ensureVisibleAuthor(viewedPost || snapshot.post);
+      if (post && !viewedPost) snapshot.post = post;
       const authors = (post?.authors?.length ? post.authors : [post?.author || snapshot.creator])
         .filter((author, index, list) => author?.username && list.findIndex((other) =>
           other?.username?.toLowerCase() === author.username.toLowerCase()) === index);
       const gate = node(creatorBody, 'section', 'x-creator-gate');
-      node(gate, 'div', 'x-creator-gate-icon', '◎');
+      const primary = authors[0] || post?.author || {};
+      const avatarUrl = upgradeAvatarUrl(primary.avatar || post?.author?.avatar || '')
+        || (isReelPage() ? reelOverlayAvatar() : '')
+        || articleAvatarUrl(viewedPostArticle, primary.username);
+      const avatar = node(gate, 'div', avatarUrl ? 'x-creator-avatar' : 'x-creator-gate-icon');
+      if (avatarUrl) {
+        const img = node(avatar, 'img', '');
+        img.alt = '';
+        img.referrerPolicy = 'strict-origin-when-cross-origin';
+        img.decoding = 'async';
+        const plainAvatar = Model.httpsUrl(primary.avatar || post?.author?.avatar || '');
+        img.addEventListener('error', () => {
+          if (plainAvatar && img.src !== plainAvatar) {
+            img.src = plainAvatar;
+            return;
+          }
+          img.remove();
+          avatar.className = 'x-creator-avatar';
+          avatar.textContent = (primary.username || 'I').slice(0, 1).toUpperCase();
+        });
+        img.src = avatarUrl;
+      } else avatar.textContent = '◎';
       node(gate, 'div', 'x-dl-video-title', t('creator'));
       node(gate, 'p', 'x-muted', t('creatorGoProfile'));
       authors.forEach((author) => {
-        const entry = button(gate, '@' + author.username, 'x-dl-btn x-creator-profile-entry', () => {
-          location.href = Model.profileUrl(author.username);
+        const label = authorLabel(author);
+        const handle = cleanHandle(author?.username || '');
+        if (!label) return;
+        const entry = button(gate, label, 'x-dl-btn x-creator-profile-entry', () => {
+          location.href = author.profileUrl || (handle ? Model.profileUrl(handle) : location.href);
         });
-        entry.setAttribute('aria-label', '@' + author.username + ' · ' + t('creatorGoProfile'));
+        entry.setAttribute('aria-label', label + ' · ' + t('creatorGoProfile'));
       });
       return;
     }
@@ -1630,9 +2468,17 @@
     if (avatarUrl) {
       const img = node(avatar, 'img', '');
       img.alt = '';
-      img.referrerPolicy = 'no-referrer';
+      img.referrerPolicy = 'strict-origin-when-cross-origin';
       img.decoding = 'async';
-      img.addEventListener('error', () => { img.remove(); avatar.textContent = (profile.username || 'I').slice(0, 1).toUpperCase(); }, { once: true });
+      const plainAvatar = Model.httpsUrl(profile.avatar || '');
+      img.addEventListener('error', () => {
+        if (plainAvatar && img.src !== plainAvatar) {
+          img.src = plainAvatar;
+          return;
+        }
+        img.remove();
+        avatar.textContent = (profile.username || 'I').slice(0, 1).toUpperCase();
+      });
       img.src = avatarUrl;
     } else avatar.textContent = (profile.username || 'I').slice(0, 1).toUpperCase();
     const identity = node(main, 'div', 'x-creator-identity');
@@ -1681,7 +2527,7 @@
         const addButton = creatorBody.querySelector('.x-creator-selection .x-dl-btn');
         if (addButton) addButton.disabled = !selectedPosts.size;
       });
-      const slot = node(row, 'div', 'x-creator-cover-slot');
+      const slot = node(row, 'div', 'x-creator-cover-slot' + creatorCoverClass(post));
       const media = post.media?.[0];
       const placeholder = node(slot, 'div', 'x-creator-cover x-creator-cover-ph');
       if (media && previewUrls(media).length) {
@@ -1692,9 +2538,8 @@
         setMediaPreview(thumb, media, () => {
           thumb.remove();
           placeholder.classList.remove('hidden');
-          showCreatorVideoCover(slot, media, placeholder);
         });
-      } else showCreatorVideoCover(slot, media, placeholder);
+      }
       const body = node(row, 'div', 'x-creator-item-body');
       const link = node(body, 'a', 'x-creator-item-title', post.title || id);
       link.href = Model.permalinkUrl(post);
@@ -2245,6 +3090,7 @@
       creatorScanToken += 1;
       creatorScanning = false;
       viewedPost = null;
+      viewedPostArticle = null;
       viewedPostLoading = false;
       viewedPostToken += 1;
       creatorPrepareToken += 1;
@@ -2431,13 +3277,41 @@
       setTimeout(() => { toggleDragged = false; }, 120);
     }
 
+    let suppressToggleClick = false;
+    function openFloatingPanel() {
+      if (shell.panel?.isOpen?.()) {
+        shell.panel.hide();
+        return true;
+      }
+      const kind = Model.routeFromUrl(location.href).kind;
+      if (kind === 'profile') return openProfileBatch();
+      if (kind !== 'post') return false;
+      viewedPostArticle = null;
+      const menu = document.getElementById('facebook-dl-menu');
+      menu?.classList.remove('is-following');
+      ['left', 'top', 'right', 'bottom', 'max-height', 'height', 'min-height', 'position'].forEach((prop) => menu?.style.removeProperty(prop));
+      shell.showHome?.();
+      shell.open?.();
+      renderView();
+      window.postMessage({ source: CONTENT_SOURCE, type: 'GET_SNAPSHOT' }, location.origin);
+      return true;
+    }
+    toggleBtn.addEventListener('pointerup', (event) => {
+      if (dragMoved || toggleDragged) return;
+      if (event.pointerType === 'mouse' && event.button !== 0) return;
+      if (!openFloatingPanel()) return;
+      suppressToggleClick = true;
+      event.preventDefault();
+      event.stopPropagation();
+    });
     toggleBtn.addEventListener('click', (event) => {
-      if (toggleDragged) {
+      if (toggleDragged || suppressToggleClick) {
+        suppressToggleClick = false;
         event.preventDefault();
         event.stopImmediatePropagation();
         return;
       }
-      if (openProfileBatch()) {
+      if (openFloatingPanel()) {
         event.preventDefault();
         event.stopImmediatePropagation();
       }

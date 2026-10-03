@@ -29,13 +29,20 @@
   let lastUrl = location.href;
   let scheduled = 0;
 
+  function profileCaptureKey() {
+    const url = new URL(location.href);
+    const path = url.pathname.toLowerCase().replace(/\/$/, '');
+    const sk = (url.searchParams.get('sk') || '').toLowerCase();
+    return sk ? path + '?sk=' + sk : path;
+  }
+
   function ingest(data, extra) {
     if (!data) return;
     const route = Model.routeFromUrl(location.href);
     if (route.kind === 'profile') {
       const bag = { posts: new Map(), stories: [], creators: [], seen: new WeakSet(), consumed: new Set(), count: 0 };
       Model.collectFromJson(data, bag, extra || {});
-      const key = new URL(location.href).pathname.toLowerCase().replace(/\/$/, '');
+      const key = profileCaptureKey();
       if (!profileCaptures.has(key)) profileCaptures.set(key, new Set());
       for (const post of bag.posts.values()) {
         const author = post.author?.username?.toLowerCase() || '';
@@ -199,7 +206,7 @@
     const route = Model.routeFromUrl(location.href);
     let snapshot = Model.snapshotFromCollected(route, collected);
     if (route.kind === 'profile') {
-      const ids = profileCaptures.get(new URL(location.href).pathname.toLowerCase().replace(/\/$/, '')) || new Set();
+      const ids = profileCaptures.get(profileCaptureKey()) || new Set();
       if (ids.size) snapshot.posts = (snapshot.posts || []).filter((post) => ids.has(post.id));
     }
     if ((route.kind === 'post' || route.kind === 'feed') && !snapshot.post) {
@@ -246,7 +253,7 @@
     const rawJsonParse = JSON.parse;
     JSON.parse = function facebookParse(text, reviver) {
       const data = rawJsonParse.apply(this, arguments);
-      if (hideFeedAds && typeof text === 'string' && /sponsored_data|SPONSORED/i.test(text) &&
+      if (hideFeedAds && typeof text === 'string' && /sponsored_data|SPONSORED|sponsor_relationship|"ad_id"\s*:/i.test(text) &&
           Model.routeFromUrl(location.href).kind === 'feed') {
         Model.filterTimelineAds(data);
       }
@@ -262,7 +269,7 @@
           if (!/(?:json|javascript|text\/plain)/i.test(type)) return response;
           try {
             const original = await response.clone().text();
-            if (!/sponsored_data|SPONSORED/i.test(original)) return response;
+            if (!/sponsored_data|SPONSORED|sponsor_relationship|"ad_id"\s*:/i.test(original)) return response;
             const payloads = parsePayloadText(original);
             if (payloads.length !== 1) return response;
             if (!Model.filterTimelineAds(payloads[0])) return response;

@@ -160,11 +160,26 @@
     return cleaned || ('Post ' + (id || 'media'));
   }
 
+  function uriOf(value) {
+    if (!value) return '';
+    if (typeof value === 'string') return value;
+    if (typeof value === 'object') return value.uri || value.url || value.src || '';
+    return '';
+  }
+
   function authorFrom(node) {
     const actor = node?.actors?.[0] || node?.owner || node?.author || node?.from || node?.user || node || {};
     const profile = actor.profile_url || actor.url || actor.wwwURL || actor.profileUrl || '';
     const username = usernameFromUrl(profile) || text(actor.username || actor.vanity || '', 80);
-    const avatarRaw = actor.profile_picture?.uri || actor.profilePic?.uri || actor.displayPicture?.uri || actor.profile_picture_url || '';
+    const avatarRaw = uriOf(actor.profile_picture)
+      || uriOf(actor.profilePic)
+      || uriOf(actor.displayPicture)
+      || uriOf(actor.profile_picture_large)
+      || uriOf(actor.big_profile_picture)
+      || uriOf(actor.profile_picture_depth_0)
+      || uriOf(actor.profile_picture_depth_1)
+      || actor.profile_picture_url
+      || '';
     return {
       id: text(actor.id || actor.user_id || '', 80),
       username,
@@ -296,8 +311,10 @@
   }
 
   function isAdNode(node) {
-    if (!node || typeof node !== 'object') return false;
-    if (node.sponsored_data || node.ad_id || node.__typename === 'SponsoredData' || node.__typename === 'Ad') return true;
+    if (!node || typeof node !== 'object' || Array.isArray(node)) return false;
+    if (node.sponsored_data || node.ad_id || node.ad_client_token || node.sponsor_relationship) return true;
+    const type = String(node.__typename || '');
+    if (type === 'SponsoredData' || type === 'Ad' || type === 'SponsoredStory') return true;
     const category = String(node.category || node.feed_unit_category || '');
     return /SPONSORED/i.test(category);
   }
@@ -348,6 +365,44 @@
     };
   }
 
+  function fileKey(url) {
+    const href = String(url || '');
+    let path = href.split('#')[0].split('?')[0];
+    try { path = new URL(href).pathname; } catch (_) {}
+    let file = path.split('/').filter(Boolean).pop() || '';
+    try { file = decodeURIComponent(file); } catch (_) {}
+    return file.toLowerCase().replace(/_(?:n|s|b|o|t|q|p)\.(jpe?g|png|webp|gif)$/i, '.$1');
+  }
+
+  function mediaFileKeys(item) {
+    const urls = [item?.posterUrl, ...(item?.imageCandidates || []).map((entry) => entry.url), ...(item?.videoCandidates || []).map((entry) => entry.url)];
+    return urls.map(fileKey).filter((key) => key.length > 5);
+  }
+
+  function dedupeMediaItems(list) {
+    const kept = [];
+    list.forEach((item) => {
+      const keys = mediaFileKeys(item);
+      const index = kept.findIndex((other) => keys.some((key) => mediaFileKeys(other).includes(key)));
+      if (index < 0) {
+        kept.push(item);
+        return;
+      }
+      const other = kept[index];
+      const better = ((item.width || 0) * (item.height || 0)) > ((other.width || 0) * (other.height || 0)) ? item : other;
+      const worse = better === item ? other : item;
+      kept[index] = {
+        ...better,
+        posterUrl: better.posterUrl || worse.posterUrl,
+        width: better.width || worse.width,
+        height: better.height || worse.height,
+        imageCandidates: sortImageCandidates([...(better.imageCandidates || []), ...(worse.imageCandidates || [])]),
+        videoCandidates: sortVideoCandidates([...(better.videoCandidates || []), ...(worse.videoCandidates || [])])
+      };
+    });
+    return kept;
+  }
+
   function gatherMedia(node, into, depth, seen) {
     if (!node || typeof node !== 'object' || depth > 8 || seen.has(node)) return;
     seen.add(node);
@@ -362,7 +417,12 @@
       if (item) into.push(item);
       return;
     }
-    const values = Array.isArray(node) ? node : Object.entries(node).filter(([key]) => !SKIP_WALK.has(key)).map((entry) => entry[1]);
+    const beforeMedia = Array.isArray(node) ? -1 : into.length;
+    if (beforeMedia >= 0 && node.media && typeof node.media === 'object') gatherMedia(node.media, into, depth + 1, seen);
+    const tookMedia = beforeMedia >= 0 && into.length > beforeMedia;
+    const values = Array.isArray(node) ? node : Object.entries(node)
+      .filter(([key]) => !SKIP_WALK.has(key) && key !== 'media' && !(tookMedia && key === 'styles'))
+      .map((entry) => entry[1]);
     values.forEach((value) => gatherMedia(value, into, depth + 1, seen));
   }
 
@@ -378,9 +438,16 @@
     if (!id) return null;
     const media = [];
     gatherMedia(node, media, 0, new WeakSet());
-    const valid = media.filter((item) => item.videoCandidates.length || item.imageCandidates.length);
+    const valid = dedupeMediaItems(media.filter((item) => item.videoCandidates.length || item.imageCandidates.length));
     if (!valid.length) return null;
     valid.forEach((item, index) => { item.index = index + 1; });
+    const usedIds = new Set();
+    valid.forEach((item) => {
+      let id = String(item.id || item.index);
+      if (usedIds.has(id)) id = id + '-' + item.index;
+      usedIds.add(id);
+      item.id = id;
+    });
     const author = authorFrom(node);
     const username = author.username || extras?.username || '';
     if (username && !author.username) author.username = username;
@@ -414,8 +481,9 @@
 
   function downloadKey(postId, media) {
     const type = media?.type === 'video' || media?.type === 'gif' ? media.type : 'image';
-    if (media?.id) return [postId || '', media.id, type].join(':');
-    return [postId || '', Number(media?.index) || 1, type].join(':');
+    const index = Number(media?.index) || 1;
+    const id = media?.id ? String(media.id) : String(index);
+    return [postId || '', id, index, type].join(':');
   }
 
   function padIndex(index, total) {
@@ -551,6 +619,10 @@
     if (parts.length >= 3 && /^(posts|videos|photos|reel|reels)$/i.test(parts[1]) && usableId(parts[2])) {
       return { kind: 'post', shortcode: usableId(parts[2]), username: parts[0], url: url.href };
     }
+    if (parts.length >= 3 && /^photos/i.test(parts[1] || '')) {
+      const photoId = [...parts].reverse().find((part) => /^\d{5,20}$/.test(part));
+      if (photoId) return { kind: 'post', shortcode: photoId, username: parts[0], url: url.href };
+    }
     if (!parts.length || parts[0] === 'home.php') return { kind: 'feed', url: url.href };
     if (RESERVED.test(parts[0])) return { kind: 'unsupported', url: url.href };
     if (parts.length === 1 || (parts.length === 2 && PROFILE_TABS.test(parts[1]))) {
@@ -669,6 +741,7 @@
     templateHasIndex,
     withAutoIndex,
     folderPrefix,
+    uniqueMedia: dedupeMediaItems,
     collectFromJson,
     parseHtmlPayloads,
     routeFromUrl,

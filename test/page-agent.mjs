@@ -97,4 +97,38 @@ const profile = Model.snapshotFromCollected(Model.routeFromUrl('https://www.face
 assert.ok(profile.posts.every((post) => post.author.username === 'ada'));
 assert.equal(profile.posts.length, 2);
 
+const album = {
+  __typename: 'Story',
+  post_id: 'pfbid0AAAABBBBCCCC',
+  url: 'https://www.facebook.com/ada/posts/pfbid0AAAABBBBCCCC',
+  message: { text: 'two photos' },
+  actors: [{ name: 'Ada', url: 'https://www.facebook.com/ada' }],
+  attachments: [
+    { media: { __typename: 'Photo', id: 'pfbid0AAAABBBBCCCC', image: { uri: 'https://scontent.xx.fbcdn.net/v/a.jpg', width: 526, height: 526 } } },
+    { media: { __typename: 'Photo', id: 'pfbid0AAAABBBBCCCC', image: { uri: 'https://scontent.xx.fbcdn.net/v/b.jpg', width: 526, height: 526 } } }
+  ]
+};
+const albumPost = collect({ data: album }).posts.get('pfbid0AAAABBBBCCCC');
+assert.equal(albumPost.media.length, 2);
+const albumKeys = albumPost.media.map((item) => Model.downloadKey(albumPost.id, item));
+assert.equal(new Set(albumKeys).size, 2, 'each selected photo keeps its own count');
+
+const repeatedPhoto = {
+  __typename: 'Story',
+  post_id: 'pfbid0DUPPHOTO',
+  url: 'https://www.facebook.com/ada/posts/pfbid0DUPPHOTO',
+  message: { text: 'same photo twice' },
+  actors: [{ name: 'Ada', url: 'https://www.facebook.com/ada' }],
+  attachments: [{
+    media: { __typename: 'Photo', id: 'photo-1', image: { uri: 'https://scontent.xx.fbcdn.net/v/t39.30808-6/111_222_n.jpg?stp=dst-jpg_s960x960', width: 512, height: 640 } },
+    styles: { attachment: { media: { __typename: 'Photo', id: 'photo-1', viewer_image: { uri: 'https://scontent.fabc.fbcdn.net/v/t39.30808-6/111_222_o.jpg?_nc_cat=1', width: 512, height: 640 } } } },
+    all_subattachments: { nodes: [{ media: { __typename: 'Photo', id: 'photo-1', image: { uri: 'https://scontent.xx.fbcdn.net/v/t39.30808-6/111_222_n.jpg', width: 512, height: 640 } } }] }
+  }]
+};
+const repeated = collect({ data: repeatedPhoto }).posts.get('pfbid0DUPPHOTO');
+assert.equal(repeated.media.length, 1, 'the same photo file is not listed twice');
+assert.equal(repeated.kind, 'image');
+assert.equal(repeated.media[0].width, 512);
+assert.equal(repeated.media[0].height, 640);
+
 console.log('facebook routes, video quality, photo size, story grouping and profile filter passed');

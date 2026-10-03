@@ -421,8 +421,9 @@ function downloadKeyOf(input) {
   const postId = text(input?.postId || input?.videoId, 160);
   const mediaType = text(input?.mediaType || input?.type, 20) || 'image';
   const mediaId = text(input?.mediaId, 160);
-  if (mediaId) return [postId, mediaId, mediaType].join(':');
-  return [postId, String(Number(input?.index) || 1), mediaType].join(':');
+  const index = String(Number(input?.index) || 1);
+  if (mediaId) return [postId, mediaId, index, mediaType].join(':');
+  return [postId, index, mediaType].join(':');
 }
 
 function sameMediaItem(left, right) {
@@ -817,10 +818,31 @@ async function control(state, id, action) {
   return task;
 }
 
+async function downloadInlineBytes(message) {
+  const bytes = message?.bytes;
+  const size = Number(bytes?.byteLength) || 0;
+  if (size < 256 || size > 8000000) throw new Error('封面不可用');
+  const filename = safeFilename(message.filename, { type: 'image', format: 'jpg' });
+  const blob = new Blob([bytes], { type: 'image/jpeg' });
+  const url = URL.createObjectURL(blob);
+  try {
+    await DownloaderKit.runtime.invoke(EXT.downloads.download, EXT.downloads, [{
+      url,
+      filename,
+      saveAs: false,
+      conflictAction: 'uniquify'
+    }]);
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+  return { ok: true };
+}
+
 EXT.runtime.onMessage.addListener((message, _sender, respond) => {
   const type = message?.type;
   if (!String(type || '').startsWith('FACEBOOK_DL_') || type === 'FACEBOOK_DL_FETCH_JSON' || type === 'FACEBOOK_DL_TASKS_CHANGED' || type === 'FACEBOOK_DL_DEBUG' || type === 'FACEBOOK_DL_PAGE_INFO' || type === 'FACEBOOK_DL_READ_PAGE_INFO' || type === 'FACEBOOK_DL_GET_INFO' || type === 'FACEBOOK_DL_RESOLVE_POST_TAB' || type === 'FACEBOOK_DL_GET_POST' || type === 'FACEBOOK_DL_CACHE_READ' || type === 'FACEBOOK_DL_CACHE_WRITE') return undefined;
   serial(async () => {
+    if (type === 'FACEBOOK_DL_DOWNLOAD_BYTES') return downloadInlineBytes(message);
     const state = await stored();
     if (type === 'FACEBOOK_DL_QUEUE_LIST') {
       const migrated = migrateTaskQueues(state.tasks);
