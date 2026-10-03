@@ -71,6 +71,9 @@
   transform: scale(1.04);
 }
 
+.dl-kit[data-theme-mode="dark"] { color-scheme: dark; }
+.dl-kit[data-theme-mode="light"] { color-scheme: light; }
+
 .dl-kit-menu {
   isolation: isolate;
   position: absolute;
@@ -83,11 +86,34 @@
   max-height: min(560px, calc(100vh - 160px));
   display: flex;
   flex-direction: column;
-  background: var(--dl-bg);
-  border: 1px solid var(--dl-border);
+  background-color: var(--theme-background, var(--dl-bg));
+  border: 1px solid var(--theme-border, var(--dl-border));
   border-radius: 10px;
-  box-shadow: var(--dl-shadow);
+  box-shadow: var(--theme-shadow, var(--dl-shadow));
   overflow: hidden;
+}
+
+.dl-kit-menu::before,
+.dl-kit-menu::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.dl-kit-menu::before {
+  z-index: -2;
+  background-image: var(--theme-gradient-background, none);
+  background-repeat: no-repeat;
+  background-size: cover;
+}
+
+.dl-kit-menu::after {
+  z-index: -1;
+  opacity: var(--theme-noise-opacity, 0);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 140px 140px;
 }
 
 .dl-kit-menu.hidden,
@@ -105,10 +131,20 @@
   height: 52px;
   min-height: 52px;
   padding: 8px 16px;
-  background: var(--dl-bg);
-  color: var(--dl-header-text);
-  border-bottom: 1px solid var(--dl-border);
+  background: color-mix(in srgb, var(--theme-background, var(--dl-bg)) 72%, transparent);
+  color: var(--theme-text-primary, var(--dl-header-text));
+  border-bottom: 1px solid var(--theme-border-soft, var(--dl-border));
+  backdrop-filter: blur(var(--theme-header-blur, 0px));
+  -webkit-backdrop-filter: blur(var(--theme-header-blur, 0px));
   flex-shrink: 0;
+}
+
+.dl-kit-header::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: var(--theme-gradient-header, none);
+  pointer-events: none;
 }
 
 .dl-kit-header::after {
@@ -129,32 +165,43 @@
   min-width: 0;
 }
 
+.dl-kit-header-left,
+.dl-kit-close {
+  position: relative;
+  z-index: 1;
+}
+
 .dl-kit-header-icon {
   width: 30px;
   height: 30px;
   border-radius: 7px;
   flex-shrink: 0;
+  filter: none;
+  opacity: 1;
+  mix-blend-mode: normal;
 }
 
 .dl-kit-title {
   font-weight: 600;
   font-size: 14px;
   white-space: nowrap;
+  color: var(--theme-text-primary, var(--dl-header-text));
 }
 
 .dl-kit-version {
   font-size: 10px;
   padding: 2px 7px;
   border-radius: var(--dl-radius);
-  background: var(--dl-surface);
-  color: var(--dl-text-muted);
+  background: var(--theme-surface-strong, var(--dl-surface));
+  border: 1px solid var(--theme-border-soft, transparent);
+  color: var(--theme-text-muted, var(--dl-text-muted));
   flex-shrink: 0;
 }
 
 .dl-kit-close {
-  background: var(--dl-surface);
-  border: 1px solid var(--dl-border);
-  color: var(--dl-text-muted);
+  background: var(--theme-surface-strong, var(--dl-surface));
+  border: 1px solid var(--theme-border-soft, var(--dl-border));
+  color: var(--theme-text-secondary, var(--dl-text-muted));
   font-size: 18px;
   width: 28px;
   height: 28px;
@@ -164,14 +211,16 @@
 }
 
 .dl-kit-close:hover {
-  background: var(--brand-soft);
-  border-color: var(--brand-border);
-  color: var(--brand-strong);
+  background: var(--theme-surface-hover, var(--surface-hover));
+  border-color: var(--theme-border, var(--dl-border));
+  color: var(--theme-text-primary, var(--dl-text));
 }
 
 .dl-kit-body {
+  position: relative;
+  z-index: 1;
   padding: 16px;
-  background: var(--dl-bg);
+  background: transparent;
   flex: 0 1 auto;
   min-height: 0;
   overflow-y: auto;
@@ -180,7 +229,7 @@
 }
 
 .dl-kit-settings-field { display: grid; gap: 8px; margin: 16px 0 8px; font-size: 12px; font-weight: 600; }
-.dl-kit-settings-field input { width: 100%; min-height: 34px; border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; background: var(--bg); color: var(--text-primary); font: inherit; }
+.dl-kit-settings-field input { width: 100%; min-height: 34px; border: 1px solid var(--theme-border, var(--border)); border-radius: 6px; padding: 6px 8px; background: var(--theme-surface, var(--surface)); color: var(--theme-text-primary, var(--text-primary)); font: inherit; }
 .dl-kit-settings-hint { color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
 .dl-kit-settings-preview { padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text-primary); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 .dl-kit-action { min-height: 30px; padding: 5px 10px; margin: 0 6px 6px 0; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text-secondary); font: inherit; font-size: 12px; cursor: pointer; }
@@ -444,15 +493,19 @@
 }
 
 .dl-kit-footer {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   align-items: stretch;
   gap: 8px;
   padding: 10px 16px;
-  background: var(--footer-bg, #f3f4f6);
-  border-top: none;
+  background: color-mix(in srgb, var(--theme-background, var(--footer-bg, #f3f4f6)) 78%, transparent);
+  border-top: 1px solid var(--theme-border-soft, transparent);
+  backdrop-filter: blur(var(--theme-header-blur, 0px));
+  -webkit-backdrop-filter: blur(var(--theme-header-blur, 0px));
   font-size: 11px;
-  color: var(--footer-text, #52525b);
+  color: var(--theme-text-muted, var(--footer-text, #52525b));
   flex-shrink: 0;
 }
 
@@ -477,7 +530,7 @@
   border-radius: 6px;
   background: var(--footer-bg, #f3f4f6);
   border: 1px solid transparent;
-  color: var(--footer-text, #52525b);
+  color: var(--theme-text-muted, var(--footer-text, #52525b));
   font-size: 11px;
   font-weight: 500;
   font-family: inherit;
@@ -492,8 +545,8 @@
 
 .dl-kit-footer-link:hover,
 .dl-kit-feedback:hover {
-  background: var(--brand-soft);
-  color: var(--brand-strong);
+  background: transparent;
+  color: var(--theme-text-secondary, var(--text-secondary));
 }
 
 .dl-kit-footer-link {
@@ -526,8 +579,8 @@
   padding: 0 9px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--bg);
-  color: var(--text-primary);
+  background: var(--theme-surface, var(--surface));
+  color: var(--theme-text-primary, var(--text-primary));
   font: inherit;
   font-size: 12px;
 }

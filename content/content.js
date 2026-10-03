@@ -486,7 +486,21 @@
     while (slot.parentElement && slot.parentElement !== row) slot = slot.parentElement;
     return { slot };
   }
+  function feedEntryThemeId() {
+    const id = shell.theme?.current?.() || 'default';
+    return id === 'default' ? 'facebook' : id;
+  }
+  function paintFeedEntryTheme(entry) {
+    if (!entry) return;
+    if (shell.theme?.paint) shell.theme.paint(entry);
+    else entry.dataset.theme = feedEntryThemeId();
+  }
+  function paintThemeSwatch(node, id) {
+    const preview = shell.theme?.preview?.(id);
+    if (node && preview) node.style.backgroundImage = preview;
+  }
   function positionFeedEntry(article, entry) {
+    paintFeedEntryTheme(entry);
     const placed = headerActionAnchor(article);
     ['position', 'top', 'left', 'right', 'bottom', 'z-index', 'height'].forEach((prop) => entry.style.removeProperty(prop));
     if (Model.routeFromUrl(location.href).kind === 'feed') {
@@ -776,6 +790,7 @@
         title: '公告',
         pinned: ['仅保存你在 Facebook 页面中可正常访问、且有权保存的公开内容。'],
         recent: [
+          '1.0.2：接入氛围主题并优化 Facebook 默认主题；新增繁体中文。',
           '1.0.1：信息流下载按钮随帖子滚动，面板跟着按钮移动；创作者与 Reel 作者会随当前内容更新。',
           '1.0.0：支持识别当前帖子、Reel、多图选择、信息流入口和个人主页扫描。',
           '可保存视频与图片；下载任务支持暂停、继续、取消和重试。',
@@ -2637,7 +2652,10 @@
     const currentLabel = themeControl.querySelector('.x-dl-settings-theme-current-label');
     const currentSwatch = themeControl.querySelector('.x-dl-settings-theme-current-swatch');
     if (currentLabel) currentLabel.textContent = current?.name || t('themeFacebook');
-    if (currentSwatch) currentSwatch.dataset.theme = currentId === 'default' ? 'facebook' : currentId;
+    if (currentSwatch) {
+      currentSwatch.dataset.theme = currentId === 'default' ? 'facebook' : currentId;
+      paintThemeSwatch(currentSwatch, currentId);
+    }
     themeControl.querySelectorAll('[data-theme-option]').forEach((option) => {
       option.setAttribute('aria-selected', String(option.dataset.themeOption === currentId));
     });
@@ -2684,6 +2702,7 @@
         const swatch = document.createElement('span');
         swatch.className = 'x-dl-settings-theme-swatch';
         swatch.dataset.theme = theme.id === 'default' ? 'facebook' : theme.id;
+        paintThemeSwatch(swatch, theme.id);
         swatch.setAttribute('aria-hidden', 'true');
         const optionLabel = document.createElement('span');
         optionLabel.textContent = theme.name;
@@ -2692,6 +2711,7 @@
           setThemeMenuOpen(false);
           try {
             await shell.theme.set(theme.id);
+            document.querySelectorAll('.x-dl-post-entry').forEach(paintFeedEntryTheme);
             syncThemePicker(themeControl);
             status.textContent = t('themeSaved');
           } catch (error) {
@@ -2728,7 +2748,8 @@
     languageSelect.setAttribute('aria-label', t('language'));
     [
       ['en', t('english')],
-      ['zh-CN', t('chinese')]
+      ['zh-CN', t('chinese')],
+      ['zh-TW', t('traditionalChinese')]
     ].forEach(([value, label]) => {
       const option = document.createElement('option');
       option.value = value;
@@ -2738,8 +2759,7 @@
     languageSelect.value = DownloaderKit.i18n?.language?.() || 'en';
     languageSelect.addEventListener('mousedown', () => setThemeMenuOpen(false));
     languageSelect.addEventListener('change', () => {
-      const value = languageSelect.value === 'en' ? 'en' : 'zh-CN';
-      DownloaderKit.i18n.save(value).then(() => applyLanguage()).catch(() => {});
+      DownloaderKit.i18n.save(languageSelect.value).then(() => applyLanguage()).catch(() => {});
     });
     languageWrap.appendChild(languageSelect);
     languageControl.appendChild(languageWrap);
@@ -2934,7 +2954,10 @@
     shell.settings?.ready?.then(() => applyForm(shell.settings.current())).catch((err) => {
       status.textContent = err?.message || t('loadFailed');
     });
-    shell.theme?.ready?.then(() => renderThemeOptions()).catch(() => {});
+    shell.theme?.ready?.then(() => {
+      renderThemeOptions();
+      document.querySelectorAll('.x-dl-post-entry').forEach(paintFeedEntryTheme);
+    }).catch(() => {});
   }
 
   function applyLanguage() {
